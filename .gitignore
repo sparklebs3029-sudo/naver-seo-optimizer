@@ -1,0 +1,16 @@
+# API 키 파일 (절대 업로드 금지)
+config.txt
+
+# 결과 파일
+output/
+*.xlsx
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# BAT 파일 (로컬 전용)
+상표명최적화.bat
+웹앱실행.bat
