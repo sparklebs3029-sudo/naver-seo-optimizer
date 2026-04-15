@@ -204,6 +204,7 @@ def optimize_name(original: str, top_keywords: list[str], model: genai.Generativ
     prompt = (
         "다음 상품명을 네이버 SEO에 맞게 롱테일 키워드로 최적화해주세요.\n"
         f"아래 고검색량 키워드를 최대한 자연스럽게 포함하세요: {keywords_str}\n"
+        "반드시 20자 이상 50자 이내로 작성하세요. 너무 짧으면 검색 노출에 불리합니다.\n"
         "최적화된 상품명 1개만 순수 텍스트로 답변하세요. 설명이나 부연은 불필요합니다.\n\n"
         f"원본 상품명: {original}"
     )
