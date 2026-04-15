@@ -10,7 +10,6 @@ import google.generativeai as genai
 import openpyxl
 from openpyxl.utils import get_column_letter
 from datetime import datetime
-from streamlit_local_storage import LocalStorage
 
 from naver_seo_agent import (
     KEYWORD_SYSTEM,
@@ -36,11 +35,13 @@ st.set_page_config(
 st.title("네이버 SEO 상품명 최적화")
 st.caption("엑셀의 상품명을 네이버 검색 데이터 기반으로 자동 최적화합니다.")
 
-# ── 로컬스토리지 초기화 ──────────────────────────────────────────────
-localS = LocalStorage()
-saved_gemini   = localS.getItem("gemini_key")   or ""
-saved_naver_id = localS.getItem("naver_id")     or ""
-saved_secret   = localS.getItem("naver_secret") or ""
+# ── 세션 내 API 키 유지 ──────────────────────────────────────────────
+if "gemini_key" not in st.session_state:
+    st.session_state.gemini_key   = ""
+if "naver_id" not in st.session_state:
+    st.session_state.naver_id     = ""
+if "naver_secret" not in st.session_state:
+    st.session_state.naver_secret = ""
 
 # ── 사이드바: API 키 입력 ────────────────────────────────────────────
 with st.sidebar:
@@ -63,24 +64,22 @@ with st.sidebar:
 
     st.divider()
 
-    gemini_key   = st.text_input("Gemini API Key",      value=saved_gemini,   type="password", placeholder="AIzaSy...")
-    naver_id     = st.text_input("Naver Client ID",     value=saved_naver_id, type="password")
-    naver_secret = st.text_input("Naver Client Secret", value=saved_secret,   type="password")
+    gemini_key   = st.text_input("Gemini API Key",      value=st.session_state.gemini_key,   type="password", placeholder="AIzaSy...")
+    naver_id     = st.text_input("Naver Client ID",     value=st.session_state.naver_id,     type="password")
+    naver_secret = st.text_input("Naver Client Secret", value=st.session_state.naver_secret, type="password")
+
+    # 입력값을 세션에 즉시 반영
+    st.session_state.gemini_key   = gemini_key
+    st.session_state.naver_id     = naver_id
+    st.session_state.naver_secret = naver_secret
 
     keys_ready = bool(gemini_key and naver_id and naver_secret)
-
-    if st.button("API 키 저장", use_container_width=True, disabled=not keys_ready):
-        localS.setItem("gemini_key",    gemini_key)
-        localS.setItem("naver_id",      naver_id)
-        localS.setItem("naver_secret",  naver_secret)
-        st.success("저장 완료! 다음부터 자동 입력됩니다.")
-
-    st.divider()
-
     if keys_ready:
         st.success("API 키 입력 완료")
     else:
         st.warning("API 키를 모두 입력해주세요")
+
+    st.caption("💡 브라우저의 비밀번호 저장 기능을 사용하면 다음 접속 시 자동 입력됩니다.")
 
 
 # ── 메인 ─────────────────────────────────────────────────────────────

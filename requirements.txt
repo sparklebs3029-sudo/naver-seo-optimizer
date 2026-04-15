@@ -3,4 +3,3 @@ arxiv>=2.1.0
 openpyxl>=3.1.0
 requests>=2.31.0
 streamlit>=1.35.0
-streamlit-local-storage>=0.0.7
