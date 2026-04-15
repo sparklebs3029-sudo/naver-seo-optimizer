@@ -433,15 +433,22 @@ def get_trending_products(
 
 # ── 출력 파일 경로 생성 ─────────────────────────────────────────────
 def get_output_path(input_path: str) -> str:
-    dir_name  = os.path.dirname(os.path.abspath(input_path))
-    base_name = os.path.splitext(os.path.basename(input_path))[0]
-    today = datetime.now().strftime("%Y%m%d")
-    n = 1
-    while True:
-        candidate = os.path.join(dir_name, f"{base_name}_seo_최적화_{today}_{n}.xlsx")
-        if not os.path.exists(candidate):
-            return candidate
+    import glob
+    dir_name      = os.path.dirname(os.path.abspath(input_path))
+    base_name     = os.path.splitext(os.path.basename(input_path))[0]
+    now           = datetime.now()
+    datetime_str  = now.strftime("%Y%m%d%H%M")   # 연월일시분
+    today_str     = now.strftime("%Y%m%d")        # 날짜 (번호 기준)
+
+    # 오늘 생성된 파일 수로 번호 결정 (00시 기준 초기화)
+    existing = glob.glob(os.path.join(dir_name, f"*_최적화_{today_str}*.xlsx"))
+    n = len(existing) + 1
+
+    candidate = os.path.join(dir_name, f"{base_name}_최적화_{datetime_str}_{n}.xlsx")
+    while os.path.exists(candidate):
         n += 1
+        candidate = os.path.join(dir_name, f"{base_name}_최적화_{datetime_str}_{n}.xlsx")
+    return candidate
 
 
 # ── 메인 (BAT 파일용) ───────────────────────────────────────────────

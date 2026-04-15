@@ -30,7 +30,7 @@ st.title("셀러부스트")
 st.caption("네이버 SEO 상품명 최적화 + 트렌드 상품 소싱")
 
 # ── 세션 상태 초기화 ─────────────────────────────────────────────────
-for key, default in [("gemini_key", ""), ("naver_id", ""), ("naver_secret", ""), ("keys_saved", False)]:
+for key, default in [("gemini_key", ""), ("naver_id", ""), ("naver_secret", ""), ("keys_saved", False), ("daily_file_count", {}),]:
     if key not in st.session_state:
         st.session_state[key] = default
 
@@ -227,8 +227,19 @@ with tab1:
             buf = io.BytesIO()
             wb.save(buf)
             buf.seek(0)
-            today    = datetime.now().strftime("%Y%m%d")
-            out_name = f"{os.path.splitext(uploaded_file.name)[0]}_seo_최적화_{today}.xlsx"
+
+            now          = datetime.now()
+            datetime_str = now.strftime("%Y%m%d%H%M")
+            today_str    = now.strftime("%Y%m%d")
+
+            # 날짜가 바뀌면 카운터 초기화
+            if today_str not in st.session_state.daily_file_count:
+                st.session_state.daily_file_count = {today_str: 0}
+            st.session_state.daily_file_count[today_str] += 1
+            n = st.session_state.daily_file_count[today_str]
+
+            stem     = os.path.splitext(uploaded_file.name)[0]
+            out_name = f"{stem}_최적화_{datetime_str}_{n}.xlsx"
 
             st.divider()
             st.download_button("결과 엑셀 다운로드", data=buf, file_name=out_name,
