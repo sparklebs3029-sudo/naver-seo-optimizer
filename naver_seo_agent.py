@@ -268,6 +268,24 @@ def clean_by_rules(name: str) -> str:
     return name
 
 
+def enforce_min_length(name: str, original: str, top_keywords: list[str], model: genai.GenerativeModel) -> str:
+    """25자 미만인 경우 키워드를 추가해 재확장합니다."""
+    if len(name) >= 25:
+        return name
+    keywords_str = ", ".join(top_keywords)
+    prompt = (
+        f"다음 상품명이 {len(name)}자로 너무 짧습니다. 반드시 25자 이상 50자 이하로 늘려주세요.\n"
+        f"원본 상품명: {original}\n"
+        f"현재 상품명: {name}\n"
+        f"참고 키워드: {keywords_str}\n"
+        "현재 상품명을 기반으로 관련 키워드를 자연스럽게 추가해 25자 이상으로 확장하세요.\n"
+        "특수문자, 배송 문구, 홍보 수식어는 사용하지 마세요.\n"
+        "순수 텍스트 상품명만 답변하세요."
+    )
+    result = clean_by_rules(model.generate_content(prompt).text.strip())
+    return result if len(result) >= 25 else name
+
+
 def verify_name(original: str, optimized: str, model: genai.GenerativeModel) -> tuple[str, str | None]:
     length = len(optimized)
     length_note = ""
@@ -287,7 +305,7 @@ def verify_name(original: str, optimized: str, model: genai.GenerativeModel) -> 
         "3. 원본 상품명에 없는 무관한 브랜드명 제거 (원본에 있는 브랜드는 유지)\n"
         "4. 원본 상품과 관련 없는 키워드 제거\n"
         "5. 네이버 금지 표현 제거\n"
-        "6. 공백 포함 25자 이상 50자 이하 유지\n\n"
+        "6. 공백 포함 25자 이상 50자 이하 유지 — 절대 25자 미만으로 줄이지 말 것\n\n"
         "다음 JSON 형식으로만 답변하세요:\n"
         '{"final_name": "최종 상품명", "issues": "수정 사항 설명 (없으면 null)"}'
     )

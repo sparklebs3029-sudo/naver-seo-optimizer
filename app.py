@@ -16,17 +16,18 @@ from naver_seo_agent import (
     NAVER_CATEGORIES, PROHIBITED_GROUPS,
     generate_keyword_candidates, detect_category,
     query_search_trend, query_shopping_insight, combine_and_select,
-    optimize_name, clean_by_rules, verify_name,
+    optimize_name, clean_by_rules, verify_name, enforce_min_length,
     get_trending_products,
 )
 
 st.set_page_config(
-    page_title="상품명 최적화",
+    page_title="셀러부스트",
     page_icon="🛒",
     layout="centered",
 )
 
-st.title("네이버 SEO 상품명 최적화")
+st.title("셀러부스트")
+st.caption("네이버 SEO 상품명 최적화 + 트렌드 상품 소싱")
 
 # ── 세션 상태 초기화 ─────────────────────────────────────────────────
 for key, default in [("gemini_key", ""), ("naver_id", ""), ("naver_secret", ""), ("keys_saved", False)]:
@@ -183,6 +184,10 @@ with tab1:
                     progress_bar.progress(pct, text=f"[{i}/{len(data_rows)}] 4/4 검수 중...")
                     status_box.info(f"**[{i}/{len(data_rows)}]** `{preview}`  \n4/4 검수 중...")
                     final_name, issues = verify_name(original, cleaned, verify_model)
+
+                    # 25자 미만이면 재확장
+                    if len(final_name) < 25:
+                        final_name = enforce_min_length(final_name, original, top_keywords, optimize_model)
 
                     ws.cell(row=row_idx, column=selected_col_idx).value = final_name
                     keyword_log.append((row_idx, top_keywords))
