@@ -232,12 +232,24 @@ def combine_and_select(
 # ── 3단계: 최적화 에이전트 ─────────────────────────────────────────
 def optimize_name(original: str, top_keywords: list[str], model: genai.GenerativeModel) -> str:
     keywords_str = ", ".join(top_keywords) if top_keywords else "없음"
+
+    # 원본에 사이즈/수량 정보 포함 여부 감지
+    has_size  = bool(re.search(r'\d+\s*(cm|mm|m|L|ml|g|kg|인치|평|구|포|매|개|장|켤레|족)', original, re.IGNORECASE))
+    has_bonus = bool(re.search(r'1\+1|2\+1|증정|사은품', original))
+
+    size_note  = "원본에 사이즈/규격 정보가 있으므로 반드시 유지하고 상품명 뒤쪽에 배치하세요." if has_size  else "원본에 사이즈 정보가 없으므로 임의로 추가하지 마세요."
+    bonus_note = "원본에 1+1/증정 정보가 있으므로 반드시 유지하고 핵심키워드 뒤에 배치하세요." if has_bonus else "원본에 1+1/증정 정보가 없으므로 임의로 추가하지 마세요."
+
     prompt = (
-        "다음 상품명을 네이버 SEO에 맞게 롱테일 키워드로 최적화해주세요.\n"
-        f"아래 고검색량 키워드를 최대한 자연스럽게 포함하세요: {keywords_str}\n"
-        "상품의 주 구매 타겟(자취생, 부모님선물, 캠핑족 등)이나 핵심 사용 상황을 파악해 상품명 앞에 1~2단어로 배치하세요.\n"
-        "반드시 공백 포함 25자 이상 50자 이하로 작성하세요.\n"
-        "최적화된 상품명 1개만 순수 텍스트로 답변하세요. 설명이나 부연은 불필요합니다.\n\n"
+        "다음 상품명을 네이버 SEO에 맞게 롱테일 키워드로 최적화해주세요.\n\n"
+        "▶ 상품명 구조 (순서 준수):\n"
+        "  [타겟/사용상황] [핵심키워드] [브랜드] [세부특성] [사이즈·수량·1+1]\n\n"
+        f"▶ 고검색량 키워드 (최대한 자연스럽게 포함): {keywords_str}\n"
+        "▶ 상품의 주 구매 타겟(자취생, 부모님선물, 캠핑족 등)을 파악해 상품명 맨 앞에 1~2단어로 배치하세요.\n"
+        f"▶ 사이즈/규격: {size_note}\n"
+        f"▶ 1+1/증정: {bonus_note}\n"
+        "▶ 반드시 공백 포함 25자 이상 50자 이하로 작성하세요.\n"
+        "▶ 최적화된 상품명 1개만 순수 텍스트로 답변하세요. 설명이나 부연은 불필요합니다.\n\n"
         f"원본 상품명: {original}"
     )
     response = model.generate_content(prompt)
