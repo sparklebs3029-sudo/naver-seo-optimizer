@@ -150,7 +150,6 @@ with tab1:
             log_box       = st.empty()
             errors:       list[dict] = []
             issues_log:   list[dict] = []
-            keyword_log:  list[tuple[int, list[str]]] = []
 
             for i, (row_idx, original) in enumerate(data_rows, 1):
                 pct     = i / len(data_rows)
@@ -190,7 +189,6 @@ with tab1:
                         final_name = enforce_min_length(final_name, original, top_keywords, optimize_model)
 
                     ws.cell(row=row_idx, column=selected_col_idx).value = final_name
-                    keyword_log.append((row_idx, top_keywords))
 
                     if issues:
                         issues_log.append({"행": row_idx, "원본": original,
@@ -214,11 +212,6 @@ with tab1:
                 log_box.text_area("처리 로그", "\n\n".join(log_entries[-8:]),
                                   height=300, label_visibility="collapsed")
 
-            # 핵심 키워드 컬럼 추가
-            kw_col = ws.max_column + 1
-            ws.cell(row=1, column=kw_col).value = "선정된 핵심 키워드"
-            for kw_row, kws in keyword_log:
-                ws.cell(row=kw_row, column=kw_col).value = ", ".join(kws)
 
             progress_bar.progress(1.0, text="완료!")
             status_box.success(f"처리 완료: {len(data_rows) - len(errors)}개 성공 / {len(errors)}개 오류")

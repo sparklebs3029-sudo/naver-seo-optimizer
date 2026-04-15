@@ -504,7 +504,6 @@ def main() -> int:
 
     errors:      list[dict] = []
     issues_log:  list[dict] = []
-    keyword_log: list[tuple[int, list[str]]] = []
 
     for i, (row_idx, original) in enumerate(data_rows, 1):
         print(f"[{i}/{len(data_rows)}] {original[:40]}")
@@ -531,7 +530,6 @@ def main() -> int:
             stage = "검수"
             final_name, issues = verify_name(original, cleaned, verify_model)
             ws.cell(row=row_idx, column=H_COL).value = final_name
-            keyword_log.append((row_idx, top_keywords))
             print(f"  [4/4] 최종: {final_name} ({len(final_name)}자)")
 
             if issues:
@@ -540,11 +538,6 @@ def main() -> int:
         except Exception as e:
             print(f"  ※ [{stage}] 오류 ({e})")
             errors.append({"행": row_idx, "원본": original, "단계": stage, "오류": str(e)})
-
-    kw_col = ws.max_column + 1
-    ws.cell(row=1, column=kw_col).value = "선정된 핵심 키워드"
-    for row_idx, kws in keyword_log:
-        ws.cell(row=row_idx, column=kw_col).value = ", ".join(kws)
 
     output_path = get_output_path(args.input)
     wb.save(output_path)
