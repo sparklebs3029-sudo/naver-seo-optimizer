@@ -164,22 +164,28 @@ if uploaded_file:
         log_entries: list[str] = []
         log_box = st.empty()
 
-        errors:     list[dict] = []
-        issues_log: list[dict] = []
+        errors:      list[dict] = []
+        issues_log:  list[dict] = []
+        keyword_log: list[tuple[int, list[str]]] = []
 
         for i, (row_idx, original) in enumerate(data_rows, 1):
             pct     = i / len(data_rows)
             preview = original[:40] + ("..." if len(original) > 40 else "")
+            stage   = ""
 
             try:
                 # 1단계
+                stage = "키워드 후보 생성"
                 progress_bar.progress(pct, text=f"[{i}/{len(data_rows)}] 1/4 키워드 후보 생성 중...")
                 status_box.info(f"**[{i}/{len(data_rows)}]** `{preview}`  \n1/4 키워드 후보 생성 및 카테고리 감지 중...")
                 candidates  = generate_keyword_candidates(original, keyword_model)
+
+                stage = "카테고리 감지"
                 category_id = detect_category(original, keyword_model)
                 cat_name    = next((k for k, v in NAVER_CATEGORIES.items() if v == category_id), "생활/건강")
 
                 # 2단계
+                stage = "검색량 조회"
                 progress_bar.progress(pct, text=f"[{i}/{len(data_rows)}] 2/4 검색량 조회 중...")
                 status_box.info(f"**[{i}/{len(data_rows)}]** `{preview}`  \n2/4 검색량 조회 중 (카테고리: {cat_name})")
                 search_scores   = query_search_trend(candidates, naver_id, naver_secret)
@@ -187,17 +193,20 @@ if uploaded_file:
                 top_keywords    = combine_and_select(search_scores, shopping_scores, candidates, n=5)
 
                 # 3단계
+                stage = "상품명 최적화"
                 progress_bar.progress(pct, text=f"[{i}/{len(data_rows)}] 3/4 상품명 최적화 중...")
                 status_box.info(f"**[{i}/{len(data_rows)}]** `{preview}`  \n3/4 상품명 최적화 중... (키워드: {', '.join(top_keywords[:3])})")
                 optimized = optimize_name(original, top_keywords, optimize_model)
                 cleaned   = clean_by_rules(optimized)
 
                 # 4단계
+                stage = "검수"
                 progress_bar.progress(pct, text=f"[{i}/{len(data_rows)}] 4/4 검수 중...")
                 status_box.info(f"**[{i}/{len(data_rows)}]** `{preview}`  \n4/4 검수 중...")
                 final_name, issues = verify_name(original, cleaned, verify_model)
 
                 ws.cell(row=row_idx, column=selected_col_idx).value = final_name
+                keyword_log.append((row_idx, top_keywords))
 
                 if issues:
                     issues_log.append({
@@ -208,16 +217,16 @@ if uploaded_file:
                 log_entries.append(
                     f"[{i}/{len(data_rows)}]\n"
                     f"  원본 : {original}\n"
-                    f"  최종 : {final_name}"
+                    f"  최종 : {final_name}  ({len(final_name)}자)"
                 )
 
             except Exception as e:
-                errors.append({"행": row_idx, "원본": original, "오류": str(e)})
+                errors.append({"행": row_idx, "원본": original, "단계": stage, "오류": str(e)})
                 ws.cell(row=row_idx, column=selected_col_idx).value = original
                 log_entries.append(
                     f"[{i}/{len(data_rows)}]\n"
                     f"  원본 : {original}\n"
-                    f"  오류 : {str(e)[:60]}"
+                    f"  오류 : [{stage}] {str(e)[:55]}"
                 )
 
             # 로그 갱신 (최근 8개 항목)
@@ -227,6 +236,12 @@ if uploaded_file:
                 height=300,
                 label_visibility="collapsed",
             )
+
+        # 핵심 키워드 컬럼 추가
+        kw_col = ws.max_column + 1
+        ws.cell(row=1, column=kw_col).value = "선정된 핵심 키워드"
+        for kw_row, kws in keyword_log:
+            ws.cell(row=kw_row, column=kw_col).value = ", ".join(kws)
 
         # ── 완료 ─────────────────────────────────────────────────────
         progress_bar.progress(1.0, text="완료!")
@@ -263,7 +278,7 @@ if uploaded_file:
             for err in errors:
                 st.error(
                     f"행 {err['행']} | {err['원본'][:50]}\n"
-                    f"오류: {err['오류']}"
+                    f"단계: {err.get('단계', '알 수 없음')} | 오류: {err['오류']}"
                 )
 
         if issues_log:
