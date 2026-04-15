@@ -12,7 +12,7 @@ from openpyxl.utils import get_column_letter
 from datetime import datetime
 
 from naver_seo_agent import (
-    KEYWORD_SYSTEM, OPTIMIZE_SYSTEM, VERIFY_SYSTEM,
+    KEYWORD_SYSTEM, OPTIMIZE_SYSTEM, VERIFY_SYSTEM, GEMINI_CONFIG,
     NAVER_CATEGORIES, PROHIBITED_GROUPS,
     generate_keyword_candidates, detect_category,
     query_search_trend, query_shopping_insight, combine_and_select,
@@ -97,9 +97,9 @@ with tab1:
 
         if single_btn and single_name:
             genai.configure(api_key=gemini_key)
-            keyword_model  = genai.GenerativeModel("gemini-2.0-flash", system_instruction=KEYWORD_SYSTEM)
-            optimize_model = genai.GenerativeModel("gemini-2.0-flash", system_instruction=OPTIMIZE_SYSTEM)
-            verify_model   = genai.GenerativeModel("gemini-2.0-flash", system_instruction=VERIFY_SYSTEM)
+            keyword_model  = genai.GenerativeModel("gemini-2.0-flash", system_instruction=KEYWORD_SYSTEM, generation_config=GEMINI_CONFIG)
+            optimize_model = genai.GenerativeModel("gemini-2.0-flash", system_instruction=OPTIMIZE_SYSTEM, generation_config=GEMINI_CONFIG)
+            verify_model   = genai.GenerativeModel("gemini-2.0-flash", system_instruction=VERIFY_SYSTEM, generation_config=GEMINI_CONFIG)
 
             with st.spinner("최적화 중..."):
                 try:
@@ -187,9 +187,9 @@ with tab1:
                 btn_area.warning("처리 중입니다. 완료될 때까지 기다려주세요...")
 
                 genai.configure(api_key=gemini_key)
-                keyword_model  = genai.GenerativeModel("gemini-2.0-flash", system_instruction=KEYWORD_SYSTEM)
-                optimize_model = genai.GenerativeModel("gemini-2.0-flash", system_instruction=OPTIMIZE_SYSTEM)
-                verify_model   = genai.GenerativeModel("gemini-2.0-flash", system_instruction=VERIFY_SYSTEM)
+                keyword_model  = genai.GenerativeModel("gemini-2.0-flash", system_instruction=KEYWORD_SYSTEM, generation_config=GEMINI_CONFIG)
+                optimize_model = genai.GenerativeModel("gemini-2.0-flash", system_instruction=OPTIMIZE_SYSTEM, generation_config=GEMINI_CONFIG)
+                verify_model   = genai.GenerativeModel("gemini-2.0-flash", system_instruction=VERIFY_SYSTEM, generation_config=GEMINI_CONFIG)
 
                 wb = openpyxl.load_workbook(io.BytesIO(raw_bytes))
                 ws = wb.active

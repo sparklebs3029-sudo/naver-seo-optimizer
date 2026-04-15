@@ -73,6 +73,8 @@ CATEGORY_SEED_KEYWORDS: dict[str, list[str]] = {
 }
 
 # ── 시스템 프롬프트 ─────────────────────────────────────────────────
+GEMINI_CONFIG = {"temperature": 0}
+
 KEYWORD_SYSTEM = """당신은 네이버 쇼핑 검색 전문가입니다.
 상품명을 보고 구매자들이 실제로 네이버에서 검색할 키워드 후보를 생성합니다."""
 
@@ -493,9 +495,9 @@ def main() -> int:
         return 1
 
     genai.configure(api_key=gemini_key)
-    keyword_model  = genai.GenerativeModel("gemini-2.0-flash", system_instruction=KEYWORD_SYSTEM)
-    optimize_model = genai.GenerativeModel("gemini-2.0-flash", system_instruction=OPTIMIZE_SYSTEM)
-    verify_model   = genai.GenerativeModel("gemini-2.0-flash", system_instruction=VERIFY_SYSTEM)
+    keyword_model  = genai.GenerativeModel("gemini-2.0-flash", system_instruction=KEYWORD_SYSTEM, generation_config=GEMINI_CONFIG)
+    optimize_model = genai.GenerativeModel("gemini-2.0-flash", system_instruction=OPTIMIZE_SYSTEM, generation_config=GEMINI_CONFIG)
+    verify_model   = genai.GenerativeModel("gemini-2.0-flash", system_instruction=VERIFY_SYSTEM, generation_config=GEMINI_CONFIG)
 
     wb = openpyxl.load_workbook(args.input)
     ws = wb.active
