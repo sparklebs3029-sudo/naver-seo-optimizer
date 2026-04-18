@@ -135,8 +135,18 @@ def _post_with_retry(url: str, headers: dict, body: dict, max_retries: int = 3) 
 
 
 # ── 1단계: 키워드 후보 에이전트 ────────────────────────────────────
-def generate_keyword_candidates(original: str, model: genai.GenerativeModel) -> list[str]:
+def generate_keyword_candidates(
+    original: str,
+    model: "genai.GenerativeModel",
+    feedback: str = "",
+) -> list[str]:
+    feedback_section = ""
+    if feedback:
+        feedback_section = (
+            f"⚠️ 이전 시도 실패 이유 (이를 참고해 더 적절한 키워드를 생성하세요):\n{feedback}\n\n"
+        )
     prompt = (
+        f"{feedback_section}"
         "다음 상품명과 관련된 네이버 쇼핑 검색 키워드 후보를 15개 생성해주세요.\n\n"
         "네이버 사용자들은 두 가지 방식으로 검색합니다:\n"
         "① 띄어쓰기 형태: '무지 에코백', '가로형 에코백'\n"

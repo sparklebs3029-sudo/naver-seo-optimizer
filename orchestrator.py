@@ -1,0 +1,267 @@
+"""
+오케스트레이터 에이전트
+4단계 파이프라인을 감독하고, 품질 검증 실패 시 재시도하며, 오류를 분류·보고합니다.
+"""
+
+from __future__ import annotations
+
+import json
+import time
+from dataclasses import dataclass, field
+from typing import Callable
+
+import requests
+
+from naver_seo_agent import (
+    DELIVERY_TERMS, PROMO_WORDS, NAVER_CATEGORIES,
+    generate_keyword_candidates, detect_category,
+    query_search_trend, query_shopping_insight, combine_and_select,
+    optimize_name, clean_by_rules, verify_name, enforce_min_length,
+)
+
+
+# ── 데이터 클래스 ────────────────────────────────────────────────────
+
+@dataclass
+class ErrorReport:
+    stage: str           # 오류 발생 단계
+    error_type: str      # 분류: API 한도 초과 / 네트워크 오류 / JSON 파싱 오류 / API 인증 오류 / 기타
+    message: str         # 원본 오류 메시지 (200자 이내)
+    action_taken: str    # 취한 조치 설명
+    resolved: bool       # 자동 해결 여부
+
+
+@dataclass
+class OrchestratorReport:
+    original: str
+    final_name: str
+    attempts: int                           # 총 시도 횟수
+    passed_validation: bool                 # 최종 품질 검증 통과 여부
+    validation_failures: list[str] = field(default_factory=list)  # 각 시도별 실패 이유
+    errors: list[ErrorReport] = field(default_factory=list)       # 발생한 오류 목록
+    warning: str | None = None              # max_retries 초과 경고 등
+
+
+# ── 오류 분류 ────────────────────────────────────────────────────────
+
+def _classify_error(error: Exception) -> tuple[str, str, bool]:
+    """
+    오류를 분류하고 (error_type, action_description, auto_resolvable) 반환.
+    auto_resolvable: True면 재시도로 해결 가능성 있음
+    """
+    err_str = str(error).lower()
+
+    if isinstance(error, requests.exceptions.HTTPError):
+        status = error.response.status_code if error.response is not None else 0
+        if status == 429:
+            return "API 한도 초과", "5초 대기 후 자동 재시도", True
+        if status in (401, 403):
+            return "API 인증 오류", "API 키를 확인하세요 (자동 해결 불가)", False
+        if status >= 500:
+            return "서버 오류", "서버 오류 — 자동 재시도 시도", True
+        return "HTTP 오류", f"HTTP {status} 오류 — API 설정 확인 필요", False
+
+    if isinstance(error, (requests.exceptions.ConnectionError, requests.exceptions.Timeout)):
+        return "네트워크 오류", "네트워크 불안정 — 1초 대기 후 자동 재시도", True
+
+    if isinstance(error, json.JSONDecodeError):
+        return "JSON 파싱 오류", "AI 응답 형식 오류 — 재시도 시 해결 가능", True
+
+    if "quota" in err_str or "rate limit" in err_str or "resource_exhausted" in err_str:
+        return "API 한도 초과", "API 사용량 한도 초과 — 5초 대기 후 재시도", True
+
+    if "api_key" in err_str or "invalid" in err_str or "unauthorized" in err_str:
+        return "API 인증 오류", "API 키 유효성 확인 필요 (자동 해결 불가)", False
+
+    return "알 수 없는 오류", f"예상치 못한 오류: {str(error)[:80]}", True
+
+
+def analyze_error(stage: str, error: Exception) -> ErrorReport:
+    """오류를 분석하고 ErrorReport를 반환합니다. resolved는 False로 초기화됩니다."""
+    error_type, action, _ = _classify_error(error)
+    return ErrorReport(
+        stage=stage,
+        error_type=error_type,
+        message=str(error)[:200],
+        action_taken=action,
+        resolved=False,
+    )
+
+
+# ── 품질 검증 ────────────────────────────────────────────────────────
+
+def validate_result(
+    original: str,
+    final_name: str,
+    issues: str | None,
+    model,
+) -> tuple[bool, list[str]]:
+    """
+    검수 완료된 결과의 품질을 재검증합니다.
+    반환: (통과 여부, 실패 이유 목록)
+    """
+    failures: list[str] = []
+
+    # 1. 글자 수 검사
+    length = len(final_name)
+    if length < 25:
+        failures.append(f"글자 수 부족: {length}자 (최소 25자 필요)")
+    elif length > 50:
+        failures.append(f"글자 수 초과: {length}자 (최대 50자)")
+
+    # 2. 홍보성 단어 잔존 여부
+    for word in PROMO_WORDS:
+        if word in final_name:
+            failures.append(f"홍보성 단어 잔존: '{word}'")
+            break
+
+    # 3. 배송 관련 문구 잔존 여부
+    for term in DELIVERY_TERMS:
+        if term in final_name:
+            failures.append(f"배송 관련 문구 잔존: '{term}'")
+            break
+
+    # 4. 검수 단계 자체 지적 사항
+    if issues:
+        failures.append(f"검수 지적 사항 미해결: {issues[:80]}")
+
+    # 5. AI 기반 상품 유형 일치 여부 (기본 규칙 통과 시에만 실행하여 비용 절감)
+    if not failures:
+        try:
+            prompt = (
+                "다음 두 상품명이 같은 종류의 상품을 설명하는지 판단하세요.\n"
+                "원본과 최적화 상품명이 완전히 다른 상품 유형으로 바뀌었다면 'NO', "
+                "같은 종류라면 'YES'로만 답하세요.\n\n"
+                f"원본: {original}\n"
+                f"최적화: {final_name}"
+            )
+            answer = model.generate_content(prompt).text.strip().upper()
+            if answer.startswith("NO"):
+                failures.append("상품 유형 변경됨: 원본과 다른 종류의 상품으로 최적화됨")
+        except Exception:
+            pass  # AI 검사 실패 시 무시 (네트워크 불안정 등)
+
+    return len(failures) == 0, failures
+
+
+# ── 오케스트레이션 메인 ──────────────────────────────────────────────
+
+def run_with_orchestration(
+    original: str,
+    models: dict,
+    api_keys: dict,
+    max_retries: int = 3,
+    progress_callback: Callable[[int, str, str], None] | None = None,
+) -> tuple[str, OrchestratorReport]:
+    """
+    오케스트레이터가 4단계 파이프라인을 실행하고 품질을 검증합니다.
+    검증 실패 시 피드백을 주입해 최대 max_retries회 재시도합니다.
+
+    Args:
+        original: 원본 상품명
+        models: {'keyword': ..., 'optimize': ..., 'verify': ...}
+        api_keys: {'naver_id': ..., 'naver_secret': ...}
+        max_retries: 최대 시도 횟수 (기본 3)
+        progress_callback: progress_callback(attempt, stage, detail) 형태의 콜백
+
+    Returns:
+        (final_name, OrchestratorReport)
+    """
+    keyword_model  = models['keyword']
+    optimize_model = models['optimize']
+    verify_model   = models['verify']
+    naver_id       = api_keys['naver_id']
+    naver_secret   = api_keys['naver_secret']
+
+    def _progress(attempt: int, stage: str, detail: str = "") -> None:
+        if progress_callback:
+            progress_callback(attempt, stage, detail)
+
+    all_validation_failures: list[str] = []
+    all_errors: list[ErrorReport] = []
+    last_final_name = original
+    feedback = ""
+
+    for attempt in range(1, max_retries + 1):
+        stage = ""
+        try:
+            # Stage 1: 키워드 생성
+            stage = "키워드 후보 생성"
+            _progress(attempt, "1/4 키워드 후보 생성 및 카테고리 감지 중...", feedback and f"피드백 반영: {feedback[:40]}")
+            candidates = generate_keyword_candidates(original, keyword_model, feedback=feedback)
+
+            stage = "카테고리 감지"
+            category_id = detect_category(original, keyword_model)
+            cat_name = next((k for k, v in NAVER_CATEGORIES.items() if v == category_id), "생활/건강")
+
+            # Stage 2: 트렌드 분석
+            stage = "검색량 조회"
+            _progress(attempt, f"2/4 검색량 조회 중...", f"카테고리: {cat_name}")
+            search_scores   = query_search_trend(candidates, naver_id, naver_secret)
+            shopping_scores = query_shopping_insight(candidates, category_id, naver_id, naver_secret)
+            top_keywords    = combine_and_select(search_scores, shopping_scores, candidates)
+
+            # Stage 3: 최적화
+            stage = "상품명 최적화"
+            _progress(attempt, "3/4 상품명 최적화 중...", f"키워드: {', '.join(top_keywords[:3])}")
+            optimized = optimize_name(original, top_keywords, optimize_model)
+            cleaned   = clean_by_rules(optimized)
+
+            # Stage 4: 검수
+            stage = "검수"
+            _progress(attempt, "4/4 검수 중...")
+            final_name, issues = verify_name(original, cleaned, verify_model)
+            if len(final_name) < 25:
+                final_name = enforce_min_length(final_name, original, top_keywords, optimize_model)
+
+            last_final_name = final_name
+
+            # 오케스트레이터 품질 검증
+            passed, failures = validate_result(original, final_name, issues, verify_model)
+
+            if passed:
+                return final_name, OrchestratorReport(
+                    original=original,
+                    final_name=final_name,
+                    attempts=attempt,
+                    passed_validation=True,
+                    validation_failures=all_validation_failures,
+                    errors=all_errors,
+                )
+
+            # 실패: 피드백 생성 후 재시도
+            failure_summary = "; ".join(failures)
+            all_validation_failures.extend([f"[시도{attempt}] {f}" for f in failures])
+            feedback = failure_summary
+
+        except Exception as e:
+            err_report = analyze_error(stage, e)
+            _, _, auto_resolvable = _classify_error(e)
+
+            if auto_resolvable:
+                wait = 5 if err_report.error_type == "API 한도 초과" else 1
+                time.sleep(wait)
+                err_report.resolved = True  # 재시도로 해결 시도함
+
+            all_errors.append(err_report)
+
+            if not auto_resolvable:
+                # 자동 해결 불가능한 오류 (인증 오류 등) — 즉시 종료
+                break
+
+    # 모든 시도 소진
+    failure_desc = (
+        f" 미해결 품질 이슈: {'; '.join(all_validation_failures[-3:])}"
+        if all_validation_failures else ""
+    )
+    warning = f"최대 재시도 횟수({max_retries})를 초과했습니다. 마지막 결과를 사용합니다.{failure_desc}"
+
+    return last_final_name, OrchestratorReport(
+        original=original,
+        final_name=last_final_name,
+        attempts=max_retries,
+        passed_validation=False,
+        validation_failures=all_validation_failures,
+        errors=all_errors,
+        warning=warning,
+    )

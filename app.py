@@ -4,7 +4,9 @@
 """
 
 import io
+import json
 import os
+import pathlib
 import streamlit as st
 import google.generativeai as genai
 import openpyxl
@@ -14,11 +16,9 @@ from datetime import datetime
 from naver_seo_agent import (
     KEYWORD_SYSTEM, OPTIMIZE_SYSTEM, VERIFY_SYSTEM, GEMINI_CONFIG,
     NAVER_CATEGORIES, PROHIBITED_GROUPS,
-    generate_keyword_candidates, detect_category,
-    query_search_trend, query_shopping_insight, combine_and_select,
-    optimize_name, clean_by_rules, verify_name, enforce_min_length,
     get_trending_products,
 )
+from orchestrator import run_with_orchestration, OrchestratorReport
 
 st.set_page_config(
     page_title="셀러부스트",
@@ -29,10 +29,39 @@ st.set_page_config(
 st.title("셀러부스트")
 st.caption("네이버 SEO 상품명 최적화 + 트렌드 상품 소싱")
 
-# ── 세션 상태 초기화 ─────────────────────────────────────────────────
-for key, default in [("gemini_key", ""), ("naver_id", ""), ("naver_secret", ""), ("keys_saved", False), ("daily_file_count", {}),]:
-    if key not in st.session_state:
-        st.session_state[key] = default
+# ── API 키 영구 저장/로드 (사용자 홈 디렉터리) ──────────────────────
+_KEYS_PATH = pathlib.Path.home() / ".sellerboost" / "keys.json"
+
+def _load_saved_keys() -> dict:
+    try:
+        return json.loads(_KEYS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+def _save_keys(gemini: str, naver_id: str, secret: str) -> None:
+    _KEYS_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _KEYS_PATH.write_text(
+        json.dumps({"gemini_key": gemini, "naver_id": naver_id, "naver_secret": secret}),
+        encoding="utf-8",
+    )
+
+def _delete_keys() -> None:
+    try:
+        _KEYS_PATH.unlink()
+    except Exception:
+        pass
+
+# ── 세션 상태 초기화 (앱 첫 실행 시 저장된 키 자동 로드) ────────────
+if "keys_loaded" not in st.session_state:
+    _saved = _load_saved_keys()
+    st.session_state.gemini_key   = _saved.get("gemini_key",   "")
+    st.session_state.naver_id     = _saved.get("naver_id",     "")
+    st.session_state.naver_secret = _saved.get("naver_secret", "")
+    st.session_state.keys_saved   = bool(st.session_state.gemini_key)
+    st.session_state.keys_loaded  = True
+
+if "daily_file_count" not in st.session_state:
+    st.session_state.daily_file_count = {}
 
 # ── 사이드바: API 키 입력 ────────────────────────────────────────────
 with st.sidebar:
@@ -61,18 +90,26 @@ with st.sidebar:
 
     keys_ready = bool(gemini_key and naver_id and naver_secret)
 
-    if st.button("API 키 저장", use_container_width=True, type="primary", disabled=not keys_ready):
-        st.session_state.gemini_key   = gemini_key
-        st.session_state.naver_id     = naver_id
-        st.session_state.naver_secret = naver_secret
-        st.session_state.keys_saved   = True
+    col_save, col_clear = st.columns([3, 1])
+    with col_save:
+        if st.button("API 키 저장", use_container_width=True, type="primary", disabled=not keys_ready):
+            st.session_state.gemini_key   = gemini_key
+            st.session_state.naver_id     = naver_id
+            st.session_state.naver_secret = naver_secret
+            st.session_state.keys_saved   = True
+            _save_keys(gemini_key, naver_id, naver_secret)
+    with col_clear:
+        if st.button("삭제", use_container_width=True, disabled=not st.session_state.keys_saved):
+            st.session_state.gemini_key   = ""
+            st.session_state.naver_id     = ""
+            st.session_state.naver_secret = ""
+            st.session_state.keys_saved   = False
+            _delete_keys()
 
     if st.session_state.keys_saved and keys_ready:
-        st.success("저장됨 (탭을 닫으면 초기화)")
+        st.success("저장됨 — 다음 접속 시 자동 로드됩니다")
     elif not keys_ready:
         st.warning("API 키를 모두 입력 후 저장해주세요")
-
-    st.caption("브라우저 자동완성을 사용하면 다음 접속 시 자동 입력됩니다.")
 
 
 # ── 탭 구성 ──────────────────────────────────────────────────────────
@@ -97,49 +134,58 @@ with tab1:
 
         if single_btn and single_name:
             genai.configure(api_key=gemini_key)
-            keyword_model  = genai.GenerativeModel("gemini-2.0-flash", system_instruction=KEYWORD_SYSTEM, generation_config=GEMINI_CONFIG)
-            optimize_model = genai.GenerativeModel("gemini-2.0-flash", system_instruction=OPTIMIZE_SYSTEM, generation_config=GEMINI_CONFIG)
-            verify_model   = genai.GenerativeModel("gemini-2.0-flash", system_instruction=VERIFY_SYSTEM, generation_config=GEMINI_CONFIG)
+            models = {
+                'keyword':  genai.GenerativeModel("gemini-2.0-flash", system_instruction=KEYWORD_SYSTEM,  generation_config=GEMINI_CONFIG),
+                'optimize': genai.GenerativeModel("gemini-2.0-flash", system_instruction=OPTIMIZE_SYSTEM, generation_config=GEMINI_CONFIG),
+                'verify':   genai.GenerativeModel("gemini-2.0-flash", system_instruction=VERIFY_SYSTEM,   generation_config=GEMINI_CONFIG),
+            }
+            api_keys = {'naver_id': naver_id, 'naver_secret': naver_secret}
+
+            status_ph = st.empty()
+
+            def single_progress(attempt: int, stage: str, detail: str = "") -> None:
+                prefix = f"[시도 {attempt}/3] " if attempt > 1 else ""
+                msg = f"{prefix}{stage}"
+                if detail:
+                    msg += f" — {detail}"
+                status_ph.info(msg)
 
             with st.spinner("최적화 중..."):
-                try:
-                    st.info("1/4 키워드 후보 생성 및 카테고리 감지 중...")
-                    candidates  = generate_keyword_candidates(single_name, keyword_model)
-                    category_id = detect_category(single_name, keyword_model)
-                    cat_name    = next((k for k, v in NAVER_CATEGORIES.items() if v == category_id), "생활/건강")
+                final_name, report = run_with_orchestration(
+                    single_name, models, api_keys,
+                    max_retries=3,
+                    progress_callback=single_progress,
+                )
 
-                    st.info(f"2/4 검색량 조회 중... (카테고리: {cat_name})")
-                    search_scores   = query_search_trend(candidates, naver_id, naver_secret)
-                    shopping_scores = query_shopping_insight(candidates, category_id, naver_id, naver_secret)
-                    top_keywords    = combine_and_select(search_scores, shopping_scores, candidates, n=5)
+            status_ph.empty()
+            st.success(f"최적화 완료! (시도 {report.attempts}회)")
+            st.divider()
 
-                    st.info(f"3/4 최적화 중... (키워드: {', '.join(top_keywords[:3])})")
-                    optimized = optimize_name(single_name, top_keywords, optimize_model)
-                    cleaned   = clean_by_rules(optimized)
+            col_a, col_b = st.columns(2)
+            with col_a:
+                st.markdown("**원본 상품명**")
+                st.code(single_name, language=None)
+            with col_b:
+                st.markdown("**최적화 상품명**")
+                st.code(final_name, language=None)
 
-                    st.info("4/4 검수 중...")
-                    final_name, issues = verify_name(single_name, cleaned, verify_model)
-                    if len(final_name) < 25:
-                        final_name = enforce_min_length(final_name, single_name, top_keywords, optimize_model)
+            st.caption(f"글자수: {len(single_name)}자 → {len(final_name)}자")
 
-                    st.success("최적화 완료!")
-                    st.divider()
+            if report.attempts > 1:
+                st.info(f"품질 기준 통과까지 {report.attempts}회 시도했습니다.")
 
-                    col_a, col_b = st.columns(2)
-                    with col_a:
-                        st.markdown("**원본 상품명**")
-                        st.code(single_name, language=None)
-                    with col_b:
-                        st.markdown("**최적화 상품명**")
-                        st.code(final_name, language=None)
+            if not report.passed_validation and report.warning:
+                st.warning(f"오케스트레이터 경고: {report.warning}")
 
-                    st.caption(f"글자수: {len(single_name)}자 → {len(final_name)}자  |  적용 키워드: {', '.join(top_keywords)}")
-
-                    if issues:
-                        st.warning(f"검수 수정사항: {issues}")
-
-                except Exception as e:
-                    st.error(f"오류 발생: {e}")
+            if report.errors:
+                with st.expander(f"처리 중 오류 {len(report.errors)}건"):
+                    for err in report.errors:
+                        color = "🔴" if not err.resolved else "🟠"
+                        st.markdown(
+                            f"{color} **[{err.stage}]** {err.error_type}  \n"
+                            f"조치: {err.action_taken}  \n"
+                            f"메시지: `{err.message[:100]}`"
+                        )
 
     # ── 엑셀 파일 모드 ────────────────────────────────────────────────
     else:
@@ -187,12 +233,19 @@ with tab1:
                 btn_area.warning("처리 중입니다. 완료될 때까지 기다려주세요...")
 
                 genai.configure(api_key=gemini_key)
-                keyword_model  = genai.GenerativeModel("gemini-2.0-flash", system_instruction=KEYWORD_SYSTEM, generation_config=GEMINI_CONFIG)
-                optimize_model = genai.GenerativeModel("gemini-2.0-flash", system_instruction=OPTIMIZE_SYSTEM, generation_config=GEMINI_CONFIG)
-                verify_model   = genai.GenerativeModel("gemini-2.0-flash", system_instruction=VERIFY_SYSTEM, generation_config=GEMINI_CONFIG)
+                models = {
+                    'keyword':  genai.GenerativeModel("gemini-2.0-flash", system_instruction=KEYWORD_SYSTEM,  generation_config=GEMINI_CONFIG),
+                    'optimize': genai.GenerativeModel("gemini-2.0-flash", system_instruction=OPTIMIZE_SYSTEM, generation_config=GEMINI_CONFIG),
+                    'verify':   genai.GenerativeModel("gemini-2.0-flash", system_instruction=VERIFY_SYSTEM,   generation_config=GEMINI_CONFIG),
+                }
+                api_keys = {'naver_id': naver_id, 'naver_secret': naver_secret}
 
                 wb = openpyxl.load_workbook(io.BytesIO(raw_bytes))
                 ws = wb.active
+
+                from openpyxl.styles import PatternFill
+                RETRY_FILL = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
+                ERROR_FILL = PatternFill(start_color="FFDCD8", end_color="FFDCD8", fill_type="solid")
 
                 data_rows = [
                     (r, str(ws.cell(row=r, column=selected_col_idx).value).strip())
@@ -201,76 +254,59 @@ with tab1:
                     and str(ws.cell(row=r, column=selected_col_idx).value).strip()
                 ]
 
-                progress_bar  = st.progress(0, text="처리 준비 중...")
-                status_box    = st.empty()
-                log_entries:  list[str] = []
-                log_box       = st.empty()
-                errors:       list[dict] = []
-                issues_log:   list[dict] = []
+                progress_bar = st.progress(0, text="처리 준비 중...")
+                status_box   = st.empty()
+                log_entries: list[str] = []
+                log_box      = st.empty()
+                all_reports: list[OrchestratorReport] = []
+                hard_errors: list[dict] = []  # 자동 해결 불가 오류
 
                 for i, (row_idx, original) in enumerate(data_rows, 1):
                     pct     = i / len(data_rows)
                     preview = original[:40] + ("..." if len(original) > 40 else "")
-                    stage   = ""
 
-                    try:
-                        stage = "키워드 후보 생성"
-                        progress_bar.progress(pct, text=f"[{i}/{len(data_rows)}] 1/4 키워드 후보 생성 중...")
-                        status_box.info(f"**[{i}/{len(data_rows)}]** `{preview}`  \n1/4 키워드 후보 생성 및 카테고리 감지 중...")
-                        candidates  = generate_keyword_candidates(original, keyword_model)
+                    def batch_progress(attempt: int, stage: str, detail: str = "", _i=i, _total=len(data_rows), _preview=preview) -> None:
+                        prefix = f"[시도{attempt}] " if attempt > 1 else ""
+                        progress_bar.progress(pct, text=f"[{_i}/{_total}] {prefix}{stage}")
+                        status_box.info(f"**[{_i}/{_total}]** `{_preview}`  \n{prefix}{stage}" + (f" — {detail}" if detail else ""))
 
-                        stage = "카테고리 감지"
-                        category_id = detect_category(original, keyword_model)
-                        cat_name    = next((k for k, v in NAVER_CATEGORIES.items() if v == category_id), "생활/건강")
+                    final_name, report = run_with_orchestration(
+                        original, models, api_keys,
+                        max_retries=3,
+                        progress_callback=batch_progress,
+                    )
+                    all_reports.append(report)
 
-                        stage = "검색량 조회"
-                        progress_bar.progress(pct, text=f"[{i}/{len(data_rows)}] 2/4 검색량 조회 중...")
-                        status_box.info(f"**[{i}/{len(data_rows)}]** `{preview}`  \n2/4 검색량 조회 중 (카테고리: {cat_name})")
-                        search_scores   = query_search_trend(candidates, naver_id, naver_secret)
-                        shopping_scores = query_shopping_insight(candidates, category_id, naver_id, naver_secret)
-                        top_keywords    = combine_and_select(search_scores, shopping_scores, candidates, n=5)
+                    ws.cell(row=row_idx, column=selected_col_idx).value = final_name
 
-                        stage = "상품명 최적화"
-                        progress_bar.progress(pct, text=f"[{i}/{len(data_rows)}] 3/4 상품명 최적화 중...")
-                        status_box.info(f"**[{i}/{len(data_rows)}]** `{preview}`  \n3/4 최적화 중... (키워드: {', '.join(top_keywords[:3])})")
-                        optimized = optimize_name(original, top_keywords, optimize_model)
-                        cleaned   = clean_by_rules(optimized)
+                    # 재시도 발생 행: 노란색, 오류 있는 행: 연한 빨간색
+                    cell = ws.cell(row=row_idx, column=selected_col_idx)
+                    unresolved_errors = [e for e in report.errors if not e.resolved]
+                    if unresolved_errors:
+                        cell.fill = ERROR_FILL
+                        hard_errors.append({"행": row_idx, "원본": original, "보고서": report})
+                    elif report.attempts > 1:
+                        cell.fill = RETRY_FILL
 
-                        stage = "검수"
-                        progress_bar.progress(pct, text=f"[{i}/{len(data_rows)}] 4/4 검수 중...")
-                        status_box.info(f"**[{i}/{len(data_rows)}]** `{preview}`  \n4/4 검수 중...")
-                        final_name, issues = verify_name(original, cleaned, verify_model)
-
-                        # 25자 미만이면 재확장
-                        if len(final_name) < 25:
-                            final_name = enforce_min_length(final_name, original, top_keywords, optimize_model)
-
-                        ws.cell(row=row_idx, column=selected_col_idx).value = final_name
-
-                        if issues:
-                            issues_log.append({"행": row_idx, "원본": original,
-                                               "최적화": cleaned, "최종": final_name, "수정사항": issues})
-
-                        log_entries.append(
-                            f"[{i}/{len(data_rows)}]\n"
-                            f"  원본 : {original}\n"
-                            f"  최종 : {final_name}  ({len(final_name)}자)"
-                        )
-
-                    except Exception as e:
-                        errors.append({"행": row_idx, "원본": original, "단계": stage, "오류": str(e)})
-                        ws.cell(row=row_idx, column=selected_col_idx).value = original
-                        log_entries.append(
-                            f"[{i}/{len(data_rows)}]\n"
-                            f"  원본 : {original}\n"
-                            f"  오류 : [{stage}] {str(e)[:55]}"
-                        )
-
+                    # 로그 작성
+                    retry_note = f" (재시도 {report.attempts}회)" if report.attempts > 1 else ""
+                    warn_note  = " ⚠️" if not report.passed_validation else ""
+                    log_entries.append(
+                        f"[{i}/{len(data_rows)}]{retry_note}{warn_note}\n"
+                        f"  원본 : {original}\n"
+                        f"  최종 : {final_name}  ({len(final_name)}자)"
+                    )
                     log_box.text_area("처리 로그", "\n\n".join(log_entries[-8:]),
                                       height=300, label_visibility="collapsed")
 
+                success_count = sum(1 for r in all_reports if not [e for e in r.errors if not e.resolved])
+                retry_count   = sum(1 for r in all_reports if r.attempts > 1)
+
                 progress_bar.progress(1.0, text="완료!")
-                status_box.success(f"처리 완료: {len(data_rows) - len(errors)}개 성공 / {len(errors)}개 오류")
+                status_box.success(
+                    f"처리 완료: {success_count}개 성공 / {len(hard_errors)}개 오류"
+                    + (f" / {retry_count}개 재시도 발생" if retry_count else "")
+                )
                 btn_area.empty()
 
                 buf = io.BytesIO()
@@ -281,7 +317,6 @@ with tab1:
                 datetime_str = now.strftime("%Y%m%d%H%M")
                 today_str    = now.strftime("%Y%m%d")
 
-                # 날짜가 바뀌면 카운터 초기화
                 if today_str not in st.session_state.daily_file_count:
                     st.session_state.daily_file_count = {today_str: 0}
                 st.session_state.daily_file_count[today_str] += 1
@@ -295,24 +330,39 @@ with tab1:
                                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                                    type="primary", use_container_width=True)
 
-                c1, c2, c3 = st.columns(3)
+                c1, c2, c3, c4 = st.columns(4)
                 c1.metric("전체", len(data_rows))
-                c2.metric("성공", len(data_rows) - len(errors))
-                c3.metric("오류", len(errors))
+                c2.metric("성공", success_count)
+                c3.metric("오류", len(hard_errors))
+                c4.metric("재시도", retry_count)
 
-                if errors:
+                if hard_errors:
                     st.subheader("오류 목록")
-                    for err in errors:
-                        st.error(f"행 {err['행']} | {err['원본'][:50]}\n"
-                                 f"단계: {err.get('단계', '알 수 없음')} | 오류: {err['오류']}")
+                    for item in hard_errors:
+                        report = item["보고서"]
+                        with st.expander(f"🔴 행 {item['행']} | {item['원본'][:50]}"):
+                            for err in report.errors:
+                                icon = "🟠" if err.resolved else "🔴"
+                                st.markdown(
+                                    f"{icon} **[{err.stage}]** {err.error_type}  \n"
+                                    f"조치: {err.action_taken}  \n"
+                                    f"메시지: `{err.message[:120]}`"
+                                )
+                            if report.warning:
+                                st.warning(report.warning)
 
-                if issues_log:
-                    st.subheader("검수 수정 목록")
-                    for log in issues_log:
-                        st.warning(f"행 {log['행']} | 원본: {log['원본'][:45]}\n"
-                                   f"최종: {log['최종'][:45]}\n사유: {log['수정사항']}")
+                retried = [r for r in all_reports if r.attempts > 1 and r.passed_validation]
+                if retried:
+                    with st.expander(f"🟠 재시도 후 성공 {len(retried)}건"):
+                        for r in retried:
+                            st.markdown(
+                                f"- **{r.original[:45]}** → `{r.final_name[:45]}`  "
+                                f"({r.attempts}회 시도)"
+                            )
+                            if r.validation_failures:
+                                st.caption("실패 이유: " + " / ".join(r.validation_failures[:2]))
 
-                if not errors and not issues_log:
+                if not hard_errors and retry_count == 0:
                     st.success("특이 사항 없음. 모든 상품명이 정상 최적화되었습니다.")
 
         else:
@@ -339,7 +389,7 @@ with tab2:
 
     col1, col2 = st.columns(2)
     with col1:
-        period_label = st.selectbox("조회 기간", ["7일 (주간)", "30일 (월간)"], index=0)
+        period_label = st.selectbox("조회 기간", ["1일 (일간)", "7일 (주간)", "30일 (월간)"], index=1)
     with col2:
         category_name = st.selectbox("카테고리", list(NAVER_CATEGORIES.keys()), index=8)
 
@@ -361,11 +411,11 @@ with tab2:
                            disabled=not keys_ready, use_container_width=True)
 
     if source_btn:
-        period_days = 7 if "7일" in period_label else 30
+        period_days = 1 if "1일" in period_label else (7 if "7일" in period_label else 30)
         category_id = NAVER_CATEGORIES[category_name]
 
         with st.spinner(f"{category_name} 카테고리 트렌드를 분석 중입니다..."):
-            results = get_trending_products(
+            fetched = get_trending_products(
                 category_name     = category_name,
                 category_id       = category_id,
                 period_days       = period_days,
@@ -376,19 +426,59 @@ with tab2:
                 top_n             = 5,
             )
 
-        if results:
-            st.success(f"총 **{len(results)}개** 상품을 찾았습니다.")
+        if fetched:
+            st.session_state.trend_results = fetched
+        else:
+            st.session_state.trend_results = []
+            st.warning(
+                "결과가 없습니다.\n\n"
+                "**확인 사항:**\n"
+                "- 네이버 앱에서 **검색(쇼핑)** API가 활성화되어 있는지 확인해주세요.\n"
+                "- 네이버 개발자센터 → 내 애플리케이션 → 사용 API에 **검색** 추가 필요"
+            )
 
-            # 트렌드 점수 기준 정렬
-            results_sorted = sorted(results, key=lambda x: x["트렌드점수"], reverse=True)
+    def _parse_price(price_str):
+        try:
+            return int(price_str.replace(",", "").replace("원", ""))
+        except (ValueError, AttributeError):
+            return -1
 
-            # 키워드별로 그룹화해서 표시
-            current_keyword = None
-            for item in results_sorted:
-                if item["키워드"] != current_keyword:
-                    current_keyword = item["키워드"]
-                    st.markdown(f"#### 키워드: {current_keyword}  (트렌드 점수: {item['트렌드점수']})")
+    if st.session_state.get("trend_results"):
+        results = st.session_state.trend_results
+        st.success(f"총 **{len(results)}개** 상품을 찾았습니다.")
 
+        col_caption, col_pv_label, col_dropdown, col_empty = st.columns([2.5, 0.7, 1.8, 1])
+        with col_caption:
+            st.markdown("<p style='padding-top:7px; margin:0; color:#888; font-size:14px'>정렬 기준을 선택하세요.</p>", unsafe_allow_html=True)
+        with col_pv_label:
+            st.markdown("<p style='padding-top:7px; margin:0'>판매가</p>", unsafe_allow_html=True)
+        with col_dropdown:
+            price_sort = st.selectbox(
+                "판매가",
+                ["높은 가격순", "낮은 가격순"],
+                key="price_sort",
+                label_visibility="collapsed",
+            )
+
+        # 키워드별로 그룹화 (트렌드 점수 내림차순 고정)
+        from collections import defaultdict
+        keyword_order = []
+        keyword_groups = defaultdict(list)
+        for item in sorted(results, key=lambda x: x["트렌드점수"], reverse=True):
+            if item["키워드"] not in keyword_groups:
+                keyword_order.append((item["키워드"], item["트렌드점수"]))
+            keyword_groups[item["키워드"]].append(item)
+
+        # 각 그룹 내 판매가 정렬
+        results_sorted = []
+        for keyword, score in keyword_order:
+            group = keyword_groups[keyword]
+            if price_sort == "높은 가격순":
+                group = sorted(group, key=lambda x: _parse_price(x["최저가"]), reverse=True)
+            elif price_sort == "낮은 가격순":
+                group = sorted(group, key=lambda x: (_parse_price(x["최저가"]) == -1, _parse_price(x["최저가"])))
+            st.markdown(f"#### 키워드: {keyword}  (트렌드 점수: {score})")
+            for item in group:
                 col_a, col_b, col_c = st.columns([4, 2, 2])
                 with col_a:
                     st.markdown(f"[{item['상품명']}]({item['링크']})")
@@ -396,19 +486,11 @@ with tab2:
                     st.write(item["최저가"])
                 with col_c:
                     st.write(item["쇼핑몰"])
+            results_sorted.extend(group)
 
-            st.divider()
+        st.divider()
 
-            # 전체 결과 데이터프레임
-            with st.expander("전체 결과 표로 보기"):
-                import pandas as pd
-                df = pd.DataFrame(results_sorted)[["키워드", "트렌드점수", "상품명", "최저가", "쇼핑몰", "카테고리"]]
-                st.dataframe(df, use_container_width=True, hide_index=True)
-
-        else:
-            st.warning(
-                "결과가 없습니다.\n\n"
-                "**확인 사항:**\n"
-                "- 네이버 앱에서 **검색(쇼핑)** API가 활성화되어 있는지 확인해주세요.\n"
-                "- 네이버 개발자센터 → 내 애플리케이션 → 사용 API에 **검색** 추가 필요"
-            )
+        with st.expander("전체 결과 표로 보기"):
+            import pandas as pd
+            df = pd.DataFrame(results_sorted)[["키워드", "트렌드점수", "상품명", "최저가", "쇼핑몰", "카테고리"]]
+            st.dataframe(df, use_container_width=True, hide_index=True)
