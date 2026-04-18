@@ -53,7 +53,18 @@ def _delete_keys() -> None:
 
 # ── 세션 상태 초기화 (앱 첫 실행 시 저장된 키 자동 로드) ────────────
 if "keys_loaded" not in st.session_state:
-    _saved = _load_saved_keys()
+    # Streamlit Secrets 우선 (클라우드 배포), 없으면 로컬 파일
+    _from_secrets = {}
+    try:
+        _g = st.secrets.get("GEMINI_API_KEY", "")
+        _n = st.secrets.get("NAVER_CLIENT_ID", "")
+        _s = st.secrets.get("NAVER_CLIENT_SECRET", "")
+        if _g or _n:
+            _from_secrets = {"gemini_key": _g, "naver_id": _n, "naver_secret": _s}
+    except Exception:
+        pass
+
+    _saved = _from_secrets or _load_saved_keys()
     st.session_state.gemini_key   = _saved.get("gemini_key",   "")
     st.session_state.naver_id     = _saved.get("naver_id",     "")
     st.session_state.naver_secret = _saved.get("naver_secret", "")
