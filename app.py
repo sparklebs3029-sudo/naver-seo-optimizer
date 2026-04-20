@@ -23,7 +23,7 @@ from naver_seo_agent import (
 )
 from orchestrator import run_with_orchestration, OrchestratorReport
 
-APP_VERSION = "v1.5.0"  # filter_to_pool 제거, 원본 품질 통과 허용
+APP_VERSION = "v1.5.1"  # validate_result 제거 오탐 수정
 
 st.set_page_config(
     page_title="셀러부스트",
