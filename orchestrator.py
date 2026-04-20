@@ -252,8 +252,8 @@ def run_with_orchestration(
             if not prev_same_as_original:
                 final_name = filter_to_pool(final_name, word_pool)
             if len(final_name) < 25:
-                extended = enforce_min_length(final_name, original_clean, top_keywords, optimize_model)
-                final_name = extended if prev_same_as_original else filter_to_pool(extended, word_pool)
+                # enforce_min_length는 단어를 추가하는 목적이므로 filter_to_pool 미적용
+                final_name = enforce_min_length(final_name, original_clean, top_keywords, optimize_model)
 
             last_final_name = final_name
 
