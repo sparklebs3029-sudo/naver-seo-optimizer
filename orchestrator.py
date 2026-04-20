@@ -28,6 +28,50 @@ ATTRIBUTE_WORDS = [
     "프릴", "리본", "체크", "스트라이프", "도트",
 ]
 
+import re as _re
+
+def _final_cleanup(name: str, top_keywords: list[str]) -> str:
+    """
+    AI 결과와 무관하게 항상 적용되는 규칙 기반 최종 정리.
+    - 특수문자 제거 (clean_by_rules보다 넓은 범위)
+    - 중복 단어 제거
+    - 50자 초과 시 단어 경계 자르기
+    - 25자 미만 시 top_keywords 단어를 순서대로 추가
+    """
+    # 특수문자 제거 (한글, 영문, 숫자, 공백, +, - 만 허용)
+    name = _re.sub(r'[^\w\s가-힣ㄱ-ㅎㅏ-ㅣa-zA-Z0-9\+\-]', '', name)
+    name = _re.sub(r'\s+', ' ', name).strip()
+
+    # 중복 단어 제거
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for w in name.split():
+        if w not in seen:
+            seen.add(w)
+            deduped.append(w)
+    name = ' '.join(deduped)
+
+    # 50자 초과 시 단어 경계에서 자르기
+    if len(name) > 50:
+        name = name[:50].rsplit(' ', 1)[0].strip()
+
+    # 25자 미만 시 top_keywords 단어 추가
+    if len(name) < 25 and top_keywords:
+        existing = set(name.split())
+        for kw in top_keywords:
+            for word in kw.split():
+                if word not in existing:
+                    candidate = (name + ' ' + word).strip()
+                    if len(candidate) <= 50:
+                        name = candidate
+                        existing.add(word)
+                if len(name) >= 25:
+                    break
+            if len(name) >= 25:
+                break
+
+    return name
+
 # ── 데이터 클래스 ────────────────────────────────────────────────────
 
 @dataclass
@@ -261,6 +305,7 @@ def run_with_orchestration(
             passed, failures = validate_result(original_clean, final_name, issues, verify_model, word_pool)
 
             if passed:
+                final_name = _final_cleanup(final_name, top_keywords)
                 return final_name, OrchestratorReport(
                     original=original,
                     final_name=final_name,
@@ -307,6 +352,8 @@ def run_with_orchestration(
                     last_final_name = fallback
         except Exception:
             pass
+
+    last_final_name = _final_cleanup(last_final_name, top_keywords)
 
     failure_desc = (
         f" 미해결 품질 이슈: {'; '.join(all_validation_failures[-3:])}"
