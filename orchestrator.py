@@ -255,6 +255,7 @@ def run_with_orchestration(
     all_validation_failures: list[str] = []
     all_errors: list[ErrorReport] = []
     original_clean = strip_product_code(original)
+    top_keywords: list[str] = []  # _final_cleanup 호출 전 미정의 방지
     last_final_name = original_clean
     word_pool: set[str] = set(original_clean.split())
     feedback = ""
