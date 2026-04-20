@@ -205,7 +205,7 @@ def run_with_orchestration(
     all_validation_failures: list[str] = []
     all_errors: list[ErrorReport] = []
     original_clean = strip_product_code(original)
-    last_final_name = original
+    last_final_name = original_clean
     word_pool: set[str] = set(original_clean.split())
     feedback = ""
 
