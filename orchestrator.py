@@ -16,7 +16,9 @@ from naver_seo_agent import (
     DELIVERY_TERMS, PROMO_WORDS, NAVER_CATEGORIES,
     generate_keyword_candidates, detect_category,
     query_search_trend, query_shopping_insight, combine_and_select,
+    classify_keywords, build_guide_name,
     optimize_name, clean_by_rules, verify_name, enforce_min_length,
+    fallback_by_shopping_search,
 )
 
 
@@ -121,9 +123,11 @@ def validate_result(
             failures.append(f"배송 관련 문구 잔존: '{term}'")
             break
 
-    # 4. 검수 단계 자체 지적 사항
+    # 4. 검수 단계 자체 지적 사항 (규칙 위반 언급이 있을 때만 실패 처리)
     if issues:
-        failures.append(f"검수 지적 사항 미해결: {issues[:80]}")
+        violation_keywords = ("금지", "위반", "제거", "포함", "초과", "미만", "브랜드", "배송", "홍보")
+        if any(kw in issues for kw in violation_keywords):
+            failures.append(f"검수 지적 사항 미해결: {issues[:80]}")
 
     # 5. AI 기반 상품 유형 일치 여부 (기본 규칙 통과 시에만 실행하여 비용 절감)
     if not failures:
@@ -168,6 +172,7 @@ def run_with_orchestration(
         (final_name, OrchestratorReport)
     """
     keyword_model  = models['keyword']
+    classify_model = models['classify']
     optimize_model = models['optimize']
     verify_model   = models['verify']
     naver_id       = api_keys['naver_id']
@@ -201,11 +206,16 @@ def run_with_orchestration(
             shopping_scores = query_shopping_insight(candidates, category_id, naver_id, naver_secret)
             top_keywords    = combine_and_select(search_scores, shopping_scores, candidates)
 
+            # Stage 2.5: 키워드 분류
+            stage = "키워드 분류"
+            core_keywords, aux_words = classify_keywords(top_keywords, original, classify_model)
+            _progress(attempt, "2.5/4 키워드 분류 완료", f"핵심: {core_keywords} / 보조: {aux_words}")
+
             # Stage 3: 최적화
             stage = "상품명 최적화"
-            _progress(attempt, "3/4 상품명 최적화 중...", f"키워드: {', '.join(top_keywords[:3])}")
-            optimized = optimize_name(original, top_keywords, optimize_model)
-            cleaned   = clean_by_rules(optimized)
+            _progress(attempt, "3/4 상품명 최적화 중...", f"핵심키워드: {', '.join(core_keywords)}")
+            optimized = optimize_name(original, core_keywords, aux_words, optimize_model)
+            cleaned   = clean_by_rules(optimized, original)
 
             # Stage 4: 검수
             stage = "검수"
@@ -249,7 +259,20 @@ def run_with_orchestration(
                 # 자동 해결 불가능한 오류 (인증 오류 등) — 즉시 종료
                 break
 
-    # 모든 시도 소진
+    # 모든 시도 소진 — 네이버 쇼핑 검색 폴백
+    if last_final_name == original or len(last_final_name) < 25:
+        try:
+            fallback = fallback_by_shopping_search(
+                original, naver_id, naver_secret, optimize_model, classify_model
+            )
+            if fallback and fallback != original:
+                if len(fallback) < 25:
+                    fallback = enforce_min_length(fallback, original, [], optimize_model)
+                if len(fallback) >= 25:
+                    last_final_name = fallback
+        except Exception:
+            pass
+
     failure_desc = (
         f" 미해결 품질 이슈: {'; '.join(all_validation_failures[-3:])}"
         if all_validation_failures else ""

@@ -45,6 +45,29 @@ PROMO_WORDS = [
     "가성비최고", "품질보장", "정품보장", "100%정품",
 ]
 
+# ── 브랜드명 목록 (원본에 없으면 제거) ──────────────────────────────
+BRAND_NAMES = [
+    # 글로벌 스포츠
+    "나이키", "아디다스", "뉴발란스", "퓨마", "리복", "컨버스", "반스",
+    "언더아머", "챔피언", "휠라",
+    # 아웃도어
+    "노스페이스", "블랙야크", "K2", "코오롱스포츠", "파타고니아", "아이더",
+    "밀레", "네파", "몽벨", "콜롬비아",
+    # 국내·글로벌 SPA
+    "유니클로", "에잇세컨즈", "탑텐", "스파오", "지오다노", "자라", "H&M", "망고", "갭",
+    # 국내·글로벌 패션
+    "빈폴", "헤지스", "라코스테", "폴로", "타미힐피거", "캘빈클라인",
+    "리바이스", "게스", "MLB", "이랜드",
+    # 명품
+    "구찌", "루이비통", "샤넬", "버버리", "프라다", "MCM", "코치",
+    "마이클코어스", "발렌시아가", "생로랑",
+    # 잠옷·홈웨어·이너웨어
+    "편한밤", "비비안", "비너스", "빅토리아시크릿", "캘빈클라인", "에스콰이아",
+    "트라이", "쌍방울", "보디가드", "예스민", "에스마인", "슈크림",
+    # 스포츠·레저 추가
+    "안다르", "젝시믹스", "뮬라웨어", "룰루레몬",
+]
+
 # ── 소싱 금지 품목 그룹 ─────────────────────────────────────────────
 PROHIBITED_GROUPS = {
     "총기/무기류":   ["총기", "권총", "소총", "공기총", "BB탄총", "도검", "폭발물", "폭탄", "화약", "탄약", "수류탄"],
@@ -77,6 +100,9 @@ GEMINI_CONFIG = {"temperature": 0}
 
 KEYWORD_SYSTEM = """당신은 네이버 쇼핑 검색 전문가입니다.
 상품명을 보고 구매자들이 실제로 네이버에서 검색할 키워드 후보를 생성합니다."""
+
+CLASSIFY_SYSTEM = """당신은 네이버 쇼핑 SEO 전문가입니다.
+주어진 키워드 목록을 핵심 키워드와 보조 단어로 분류하고 반드시 JSON으로만 응답합니다."""
 
 OPTIMIZE_SYSTEM = """당신은 네이버 스마트스토어 SEO 전문가입니다.
 네이버 검색 알고리즘과 쇼핑 검색 최적화에 깊은 이해를 가지고 있습니다.
@@ -248,28 +274,98 @@ def combine_and_select(
     return [kw for kw, _ in sorted(combined.items(), key=lambda x: x[1], reverse=True)[:n]]
 
 
-# ── 3단계: 최적화 에이전트 ─────────────────────────────────────────
-def optimize_name(original: str, top_keywords: list[str], model: genai.GenerativeModel) -> str:
-    keywords_str = ", ".join(top_keywords) if top_keywords else "없음"
+# ── 2.5단계: 키워드 분류 (핵심 / 보조) ────────────────────────────
+def classify_keywords(
+    top_keywords: list[str],
+    original: str,
+    model: "genai.GenerativeModel",
+) -> tuple[list[str], list[str]]:
+    """상위 키워드를 핵심 키워드(3개)와 보조 단어(최대 3개)로 분류한다.
 
-    # 원본에 사이즈/수량 정보 포함 여부 감지
+    핵심 키워드: 상품을 직접 설명하는 복합 키워드. 상품명에서 쪼개지 않고 사용.
+    보조 단어: 핵심 키워드 바로 뒤에 붙였을 때 역방향으로 읽으면 유효한 검색어가 되는 짧은 단어.
+    """
+    prompt = (
+        f"상품명: {original}\n"
+        f"인기 키워드 목록: {', '.join(top_keywords)}\n\n"
+        "아래 기준으로 분류하세요.\n\n"
+        "핵심 키워드 3개: 검색량이 높고 상품을 직접 설명하는 복합 키워드. 상품명에서 절대 쪼개지 않음.\n"
+        "보조 단어 최대 3개: 핵심 키워드 바로 뒤에 붙였을 때 역방향으로 읽으면 유효한 검색어가 되는 짧은 단어(1~3음절).\n"
+        "  예: 핵심='반팔 롱 원피스', 보조='여자' → '반팔 롱 원피스 여자'를 뒤에서 읽으면 '여자원피스'\n\n"
+        "핵심 키워드가 3개 미만이면 관련 키워드를 조합해 보완하세요.\n"
+        '다음 JSON 형식으로만 답변: {"core": ["핵심1", "핵심2", "핵심3"], "aux": ["보조1", "보조2", "보조3"]}'
+    )
+    try:
+        response = model.generate_content(prompt)
+        raw = response.text.strip()
+        if raw.startswith("```"):
+            lines = raw.splitlines()
+            raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+        data = json.loads(raw)
+        core = data.get("core", top_keywords[:3])[:3]
+        aux  = data.get("aux", [])[:3]
+        return core, aux
+    except Exception:
+        return top_keywords[:3], []
+
+
+def build_guide_name(core_keywords: list[str], aux_words: list[str]) -> str:
+    """핵심 키워드 사이에 보조 단어를 삽입해 역순 조합 구조의 상품명을 만든다.
+
+    보조 단어를 최대한 포함하면서 50자 이하가 되도록 뒤쪽 보조 단어부터 제거한다.
+    """
+    for num_aux in range(len(aux_words), -1, -1):
+        parts: list[str] = []
+        for i, core in enumerate(core_keywords):
+            parts.append(core)
+            if i < num_aux and i < len(aux_words) and aux_words[i]:
+                parts.append(aux_words[i])
+        name = " ".join(parts).strip()
+        if len(name) <= 50:
+            return name
+    name = " ".join(core_keywords)
+    return name[:50].rsplit(" ", 1)[0] if len(name) > 50 else name
+
+
+# ── 3단계: 최적화 에이전트 ─────────────────────────────────────────
+def optimize_name(
+    original: str,
+    core_keywords: list[str],
+    aux_words: list[str],
+    model: "genai.GenerativeModel",
+) -> str:
+    """가이드 역순 조합 구조로 상품명을 최적화한다.
+
+    사이즈·1+1 정보가 없으면 알고리즘으로 구성한 이름을 그대로 반환한다.
+    해당 정보가 있으면 AI가 삽입 위치를 결정한다.
+    """
+    guide_name = build_guide_name(core_keywords, aux_words)
+
     has_size  = bool(re.search(r'\d+\s*(cm|mm|m|L|ml|g|kg|인치|평|구|포|매|개|장|켤레|족)', original, re.IGNORECASE))
     has_bonus = bool(re.search(r'1\+1|2\+1|증정|사은품', original))
 
+    if not has_size and not has_bonus and 25 <= len(guide_name) <= 50:
+        return guide_name
+
     size_note  = "원본에 사이즈/규격 정보가 있으므로 반드시 유지하고 상품명 뒤쪽에 배치하세요." if has_size  else "원본에 사이즈 정보가 없으므로 임의로 추가하지 마세요."
     bonus_note = "원본에 1+1/증정 정보가 있으므로 반드시 유지하고 핵심키워드 뒤에 배치하세요." if has_bonus else "원본에 1+1/증정 정보가 없으므로 임의로 추가하지 마세요."
+    core_str   = " / ".join(core_keywords)
+    aux_str    = " / ".join(aux_words) if aux_words else "없음"
 
     prompt = (
-        "다음 상품명을 네이버 SEO에 맞게 롱테일 키워드로 최적화해주세요.\n\n"
-        "▶ 상품명 구조 (순서 준수):\n"
-        "  [타겟/사용상황] [핵심키워드] [브랜드] [세부특성] [사이즈·수량·1+1]\n\n"
-        f"▶ 고검색량 키워드 (최대한 자연스럽게 포함): {keywords_str}\n"
-        "▶ 상품의 주 구매 타겟(자취생, 부모님선물, 캠핑족 등)을 파악해 상품명 맨 앞에 1~2단어로 배치하세요.\n"
+        "아래 구조를 따라 네이버 SEO 상품명을 완성하세요.\n\n"
+        "▶ 역순 조합 구조 (이 순서를 반드시 유지):\n"
+        f"  핵심 키워드: {core_str}\n"
+        f"  보조 단어: {aux_str}\n"
+        "  조합 규칙: [핵심1] [보조1] [핵심2] [보조2] [핵심3] [보조3]\n"
+        "  — 핵심 키워드는 절대 쪼개지 말 것. 보조 단어는 핵심 키워드 바로 뒤에 삽입.\n\n"
         f"▶ 사이즈/규격: {size_note}\n"
         f"▶ 1+1/증정: {bonus_note}\n"
-        "▶ 반드시 공백 포함 25자 이상 50자 이하로 작성하세요.\n"
-        "▶ 최적화된 상품명 1개만 순수 텍스트로 답변하세요. 설명이나 부연은 불필요합니다.\n\n"
-        f"원본 상품명: {original}"
+        "▶ 반드시 공백 포함 25자 이상 50자 이하\n"
+        "▶ 특수문자·배송 문구·홍보 수식어·원본에 없는 브랜드명 금지\n"
+        "▶ 순수 텍스트 상품명 1개만 출력\n\n"
+        f"원본 상품명: {original}\n"
+        f"초안(참고용): {guide_name}"
     )
     response = model.generate_content(prompt)
     return response.text.strip()
@@ -286,12 +382,15 @@ def _remove_duplicate_words(text: str) -> str:
     return " ".join(result)
 
 
-def clean_by_rules(name: str) -> str:
+def clean_by_rules(name: str, original: str = "") -> str:
     name = re.sub(r'[*#~`\[\](){}|/\\]', '', name)
     for term in DELIVERY_TERMS:
         name = name.replace(term, '')
     for word in PROMO_WORDS:
         name = re.sub(rf'\b{re.escape(word)}\b', '', name)
+    for brand in BRAND_NAMES:
+        if brand in name and brand not in original:
+            name = name.replace(brand, '')
     name = _remove_duplicate_words(name)
     name = re.sub(r'\s+', ' ', name).strip()
     if len(name) > 50:
@@ -313,7 +412,7 @@ def enforce_min_length(name: str, original: str, top_keywords: list[str], model:
         "특수문자, 배송 문구, 홍보 수식어는 사용하지 마세요.\n"
         "순수 텍스트 상품명만 답변하세요."
     )
-    result = clean_by_rules(model.generate_content(prompt).text.strip())
+    result = clean_by_rules(model.generate_content(prompt).text.strip(), original)
     return result if len(result) >= 25 else name
 
 
@@ -345,8 +444,14 @@ def verify_name(original: str, optimized: str, model: genai.GenerativeModel) -> 
     if raw.startswith("```"):
         lines = raw.splitlines()
         raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    data = json.loads(raw)
-    return data["final_name"], data.get("issues") or None
+    try:
+        data = json.loads(raw)
+        final_name = data.get("final_name") or optimized
+        issues_raw = data.get("issues")
+        issues = issues_raw if isinstance(issues_raw, str) and issues_raw.lower() not in ("null", "없음", "none", "") else None
+        return final_name, issues
+    except Exception:
+        return optimized, None
 
 
 # ── 소싱 에이전트 ───────────────────────────────────────────────────
@@ -366,6 +471,80 @@ def search_naver_shopping(keyword: str, client_id: str, client_secret: str, disp
     for item in items:
         item["title"] = re.sub(r"<[^>]+>", "", item.get("title", ""))
     return items
+
+
+def extract_search_query(original: str, model) -> str:
+    """원본명에서 핵심 카테고리 키워드 2~3개만 추출해 검색 쿼리로 반환합니다."""
+    prompt = (
+        f"상품명: {original}\n\n"
+        "네이버 쇼핑 검색에 사용할 핵심 카테고리 키워드 2~3개만 추출하세요.\n"
+        "형용사·수식어·소재명은 제외, 상품 종류를 나타내는 단어만 남기세요.\n"
+        "예: '끈 조절 슬립 잠옷원피스' → '슬립 잠옷원피스'\n"
+        "예: '여성 루즈핏 반팔 롱 면 원피스' → '여성 롱 원피스'\n"
+        "결과만 출력하세요."
+    )
+    try:
+        return model.generate_content(prompt).text.strip()
+    except Exception:
+        return original
+
+
+def fallback_by_shopping_search(
+    original: str,
+    naver_id: str,
+    naver_secret: str,
+    model,
+    classify_model,
+) -> str:
+    """3회 재시도 실패 시 네이버 쇼핑 상위 상품명을 참고해 폴백 최적화합니다."""
+    search_query = extract_search_query(original, classify_model)
+    items = search_naver_shopping(search_query, naver_id, naver_secret, display=5)
+
+    competitor_names = []
+    for item in items:
+        name = item.get("title", "")
+        for brand in BRAND_NAMES:
+            name = name.replace(brand, "")
+        name = name.strip()
+        if name:
+            competitor_names.append(name)
+
+    if not competitor_names:
+        prompt = (
+            f"원본 상품명: {original}\n\n"
+            "원본 상품명을 네이버 SEO에 맞게 직접 확장하세요.\n"
+            "▶ 공백 포함 25자 이상 50자 이하\n"
+            "▶ 소재, 형태, 타겟, 용도 키워드를 추가\n"
+            "▶ 특수문자·배송 문구·홍보 수식어 금지\n"
+            "▶ 순수 텍스트 상품명 1개만 출력"
+        )
+        try:
+            result = model.generate_content(prompt).text.strip()
+            cleaned = clean_by_rules(result, original)
+            if len(cleaned) < 25:
+                cleaned = enforce_min_length(cleaned, original, [], model)
+            return cleaned
+        except Exception:
+            return original
+
+    names_str = "\n".join(f"- {n}" for n in competitor_names[:5])
+    prompt = (
+        f"원본 상품명: {original}\n\n"
+        f"네이버 쇼핑 상위 노출 유사 상품명 (참고용):\n{names_str}\n\n"
+        "위 상품명들의 키워드 패턴을 참고해 원본 상품명을 네이버 SEO에 맞게 최적화하세요.\n"
+        "▶ 공백 포함 25자 이상 50자 이하\n"
+        "▶ 원본과 동일한 상품 유형 유지\n"
+        "▶ 특수문자·배송 문구·홍보 수식어·원본에 없는 브랜드명 금지\n"
+        "▶ 순수 텍스트 상품명 1개만 출력"
+    )
+    try:
+        result = model.generate_content(prompt).text.strip()
+        cleaned = clean_by_rules(result, original)
+        if len(cleaned) < 25:
+            cleaned = enforce_min_length(cleaned, original, competitor_names, model)
+        return cleaned
+    except Exception:
+        return original
 
 
 def is_prohibited(text: str, active_groups: list[str]) -> bool:
@@ -505,9 +684,10 @@ def main() -> int:
         return 1
 
     genai.configure(api_key=gemini_key)
-    keyword_model  = genai.GenerativeModel("gemini-2.0-flash", system_instruction=KEYWORD_SYSTEM, generation_config=GEMINI_CONFIG)
+    keyword_model  = genai.GenerativeModel("gemini-2.0-flash", system_instruction=KEYWORD_SYSTEM,  generation_config=GEMINI_CONFIG)
+    classify_model = genai.GenerativeModel("gemini-2.0-flash", system_instruction=CLASSIFY_SYSTEM, generation_config=GEMINI_CONFIG)
     optimize_model = genai.GenerativeModel("gemini-2.0-flash", system_instruction=OPTIMIZE_SYSTEM, generation_config=GEMINI_CONFIG)
-    verify_model   = genai.GenerativeModel("gemini-2.0-flash", system_instruction=VERIFY_SYSTEM, generation_config=GEMINI_CONFIG)
+    verify_model   = genai.GenerativeModel("gemini-2.0-flash", system_instruction=VERIFY_SYSTEM,   generation_config=GEMINI_CONFIG)
 
     wb = openpyxl.load_workbook(args.input)
     ws = wb.active
@@ -541,9 +721,13 @@ def main() -> int:
             top_keywords    = combine_and_select(search_scores, shopping_scores, candidates)
             print(f"  [2/4] 키워드: {', '.join(top_keywords)}")
 
+            stage = "키워드 분류"
+            core_keywords, aux_words = classify_keywords(top_keywords, original, classify_model)
+            print(f"  [2.5] 핵심: {core_keywords} / 보조: {aux_words}")
+
             stage = "상품명 최적화"
-            optimized = optimize_name(original, top_keywords, optimize_model)
-            cleaned   = clean_by_rules(optimized)
+            optimized = optimize_name(original, core_keywords, aux_words, optimize_model)
+            cleaned   = clean_by_rules(optimized, original)
             print(f"  [3/4] 최적화: {cleaned} ({len(cleaned)}자)")
 
             stage = "검수"
