@@ -18,7 +18,7 @@ from naver_seo_agent import (
     query_search_trend, query_shopping_insight, combine_and_select,
     classify_keywords, build_guide_name,
     optimize_name, clean_by_rules, verify_name, enforce_min_length,
-    fallback_by_shopping_search,
+    fallback_by_shopping_search, strip_product_code,
 )
 
 
@@ -104,6 +104,12 @@ def validate_result(
     """
     failures: list[str] = []
 
+    # 0. 원본과 동일 여부
+    import re as _re
+    if _re.sub(r'\s+', '', final_name).lower() == _re.sub(r'\s+', '', original).lower():
+        failures.append("원본 상품명과 동일: 인기 키워드를 활용해 새롭게 최적화하세요")
+        return False, failures
+
     # 1. 글자 수 검사
     length = len(final_name)
     if length < 25:
@@ -184,6 +190,7 @@ def run_with_orchestration(
 
     all_validation_failures: list[str] = []
     all_errors: list[ErrorReport] = []
+    original_clean = strip_product_code(original)
     last_final_name = original
     feedback = ""
 
@@ -193,10 +200,10 @@ def run_with_orchestration(
             # Stage 1: 키워드 생성
             stage = "키워드 후보 생성"
             _progress(attempt, "1/4 키워드 후보 생성 및 카테고리 감지 중...", feedback and f"피드백 반영: {feedback[:40]}")
-            candidates = generate_keyword_candidates(original, keyword_model, feedback=feedback)
+            candidates = generate_keyword_candidates(original_clean, keyword_model, feedback=feedback)
 
             stage = "카테고리 감지"
-            category_id = detect_category(original, keyword_model)
+            category_id = detect_category(original_clean, keyword_model)
             cat_name = next((k for k, v in NAVER_CATEGORIES.items() if v == category_id), "생활/건강")
 
             # Stage 2: 트렌드 분석
@@ -208,26 +215,26 @@ def run_with_orchestration(
 
             # Stage 2.5: 키워드 분류
             stage = "키워드 분류"
-            core_keywords, aux_words = classify_keywords(top_keywords, original, classify_model)
+            core_keywords, aux_words = classify_keywords(top_keywords, original_clean, classify_model)
             _progress(attempt, "2.5/4 키워드 분류 완료", f"핵심: {core_keywords} / 보조: {aux_words}")
 
             # Stage 3: 최적화
             stage = "상품명 최적화"
             _progress(attempt, "3/4 상품명 최적화 중...", f"핵심키워드: {', '.join(core_keywords)}")
-            optimized = optimize_name(original, core_keywords, aux_words, optimize_model)
-            cleaned   = clean_by_rules(optimized, original)
+            optimized = optimize_name(original_clean, core_keywords, aux_words, optimize_model)
+            cleaned   = clean_by_rules(optimized, original_clean)
 
             # Stage 4: 검수
             stage = "검수"
             _progress(attempt, "4/4 검수 중...")
-            final_name, issues = verify_name(original, cleaned, verify_model)
+            final_name, issues = verify_name(original_clean, cleaned, verify_model)
             if len(final_name) < 25:
-                final_name = enforce_min_length(final_name, original, top_keywords, optimize_model)
+                final_name = enforce_min_length(final_name, original_clean, top_keywords, optimize_model)
 
             last_final_name = final_name
 
             # 오케스트레이터 품질 검증
-            passed, failures = validate_result(original, final_name, issues, verify_model)
+            passed, failures = validate_result(original_clean, final_name, issues, verify_model)
 
             if passed:
                 return final_name, OrchestratorReport(
@@ -260,14 +267,17 @@ def run_with_orchestration(
                 break
 
     # 모든 시도 소진 — 네이버 쇼핑 검색 폴백
-    if last_final_name == original or len(last_final_name) < 25:
+    import re as _re
+    last_normalized = _re.sub(r'\s+', '', last_final_name).lower()
+    clean_normalized = _re.sub(r'\s+', '', original_clean).lower()
+    if last_normalized == clean_normalized or len(last_final_name) < 25:
         try:
             fallback = fallback_by_shopping_search(
-                original, naver_id, naver_secret, optimize_model, classify_model
+                original_clean, naver_id, naver_secret, optimize_model, classify_model
             )
-            if fallback and fallback != original:
+            if fallback and _re.sub(r'\s+', '', fallback).lower() != clean_normalized:
                 if len(fallback) < 25:
-                    fallback = enforce_min_length(fallback, original, [], optimize_model)
+                    fallback = enforce_min_length(fallback, original_clean, [], optimize_model)
                 if len(fallback) >= 25:
                     last_final_name = fallback
         except Exception:

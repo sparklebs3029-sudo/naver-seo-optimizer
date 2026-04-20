@@ -160,6 +160,12 @@ def _post_with_retry(url: str, headers: dict, body: dict, max_retries: int = 3) 
     raise last_err
 
 
+# ── 상품코드 제거 ──────────────────────────────────────────────────
+def strip_product_code(name: str) -> str:
+    """상품명 끝의 상품코드(예: LKO550, TY280, 12AB)를 제거합니다."""
+    return re.sub(r'\s+(?:[A-Z]{1,6}\d{2,}|\d{2,}[A-Z]{1,6})$', '', name).strip()
+
+
 # ── 1단계: 키워드 후보 에이전트 ────────────────────────────────────
 def generate_keyword_candidates(
     original: str,
