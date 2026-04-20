@@ -268,10 +268,6 @@ with tab1:
                 start_btn = st.button("최적화 시작", type="primary",
                                       disabled=not keys_ready, use_container_width=True)
                 if start_btn:
-                    from openpyxl.styles import PatternFill
-                    RETRY_FILL = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
-                    ERROR_FILL = PatternFill(start_color="FFDCD8", end_color="FFDCD8", fill_type="solid")
-
                     genai.configure(api_key=gemini_key)
                     models = {
                         'keyword':  genai.GenerativeModel("gemini-2.0-flash", system_instruction=KEYWORD_SYSTEM,  generation_config=GEMINI_CONFIG),
@@ -305,10 +301,6 @@ with tab1:
                     st.session_state.batch = new_batch
 
                     def _run_batch(state: _BatchState, drows, _models, _api_keys, _wb, _ws, _col_idx):
-                        from openpyxl.styles import PatternFill as PF
-                        retry_fill = PF(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
-                        error_fill = PF(start_color="FFDCD8", end_color="FFDCD8", fill_type="solid")
-
                         for i, (row_idx, original) in enumerate(drows, 1):
                             if state.stop_event.is_set():
                                 state.status  = f"중단됨 — {i - 1}개 완료"
@@ -327,13 +319,9 @@ with tab1:
                             state.all_reports.append(report)
                             _ws.cell(row=row_idx, column=_col_idx).value = final_name
 
-                            cell = _ws.cell(row=row_idx, column=_col_idx)
                             unresolved = [e for e in report.errors if not e.resolved]
                             if unresolved:
-                                cell.fill = error_fill
                                 state.hard_errors.append({"행": row_idx, "원본": original, "보고서": report})
-                            elif report.attempts > 1:
-                                cell.fill = retry_fill
 
                             retry_note = f" (재시도 {report.attempts}회)" if report.attempts > 1 else ""
                             warn_note  = " ⚠️" if not report.passed_validation else ""
