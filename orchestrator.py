@@ -19,6 +19,7 @@ from naver_seo_agent import (
     classify_keywords, build_guide_name,
     optimize_name, clean_by_rules, verify_name, enforce_min_length,
     fallback_by_shopping_search, strip_product_code,
+    build_word_pool, filter_to_pool,
 )
 
 ATTRIBUTE_WORDS = [
@@ -203,6 +204,7 @@ def run_with_orchestration(
     all_errors: list[ErrorReport] = []
     original_clean = strip_product_code(original)
     last_final_name = original
+    word_pool: set[str] = set(original_clean.split())
     feedback = ""
 
     for attempt in range(1, max_retries + 1):
@@ -223,24 +225,29 @@ def run_with_orchestration(
             search_scores   = query_search_trend(candidates, naver_id, naver_secret)
             shopping_scores = query_shopping_insight(candidates, category_id, naver_id, naver_secret)
             top_keywords    = combine_and_select(search_scores, shopping_scores, candidates)
+            word_pool       = build_word_pool(original_clean, top_keywords)
 
             # Stage 2.5: 키워드 분류
             stage = "키워드 분류"
             core_keywords, aux_words = classify_keywords(top_keywords, original_clean, classify_model)
             _progress(attempt, "2.5/4 키워드 분류 완료", f"핵심: {core_keywords} / 보조: {aux_words}")
 
-            # Stage 3: 최적화
+            # Stage 3: 최적화 → pool 필터 적용
             stage = "상품명 최적화"
             _progress(attempt, "3/4 상품명 최적화 중...", f"핵심키워드: {', '.join(core_keywords)}")
             optimized = optimize_name(original_clean, core_keywords, aux_words, optimize_model)
-            cleaned   = clean_by_rules(optimized, original_clean)
+            cleaned   = filter_to_pool(clean_by_rules(optimized, original_clean), word_pool)
 
-            # Stage 4: 검수
+            # Stage 4: 검수 → pool 필터 적용
             stage = "검수"
             _progress(attempt, "4/4 검수 중...")
             final_name, issues = verify_name(original_clean, cleaned, verify_model)
+            final_name = filter_to_pool(final_name, word_pool)
             if len(final_name) < 25:
-                final_name = enforce_min_length(final_name, original_clean, top_keywords, optimize_model)
+                final_name = filter_to_pool(
+                    enforce_min_length(final_name, original_clean, top_keywords, optimize_model),
+                    word_pool,
+                )
 
             last_final_name = final_name
 
@@ -287,8 +294,12 @@ def run_with_orchestration(
                 original_clean, naver_id, naver_secret, optimize_model, classify_model
             )
             if fallback and _re.sub(r'\s+', '', fallback).lower() != clean_normalized:
+                fallback = filter_to_pool(fallback, word_pool)
                 if len(fallback) < 25:
-                    fallback = enforce_min_length(fallback, original_clean, [], optimize_model)
+                    fallback = filter_to_pool(
+                        enforce_min_length(fallback, original_clean, [], optimize_model),
+                        word_pool,
+                    )
                 if len(fallback) >= 25:
                     last_final_name = fallback
         except Exception:

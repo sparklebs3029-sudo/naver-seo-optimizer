@@ -168,8 +168,32 @@ def _post_with_retry(url: str, headers: dict, body: dict, max_retries: int = 3) 
 
 # ── 상품코드 제거 ──────────────────────────────────────────────────
 def strip_product_code(name: str) -> str:
-    """상품명 끝의 상품코드(예: LKO550, TY280, 12AB)를 제거합니다."""
-    return re.sub(r'\s+(?:[A-Z]{1,6}\d{2,}|\d{2,}[A-Z]{1,6})$', '', name).strip()
+    """상품명 끝의 상품코드(예: LKO550, SEG-1008129, UJS-065)를 제거합니다."""
+    return re.sub(r'\s+[A-Z]{1,6}[-]?\d{2,}[-]?\d*$', '', name).strip()
+
+
+# ── 단어 풀 구성 / 필터 ────────────────────────────────────────────
+def build_word_pool(original: str, top_keywords: list[str]) -> set[str]:
+    """원본 단어 + 트렌드 키워드 단어로 허용 풀을 구성합니다.
+    인접 2-gram도 포함해 복합어(잠옷+원피스→잠옷원피스) 허용."""
+    pool: set[str] = set()
+    orig_tokens = original.split()
+    pool.update(orig_tokens)
+    for i in range(len(orig_tokens) - 1):
+        pool.add(orig_tokens[i] + orig_tokens[i + 1])
+    for kw in top_keywords:
+        pool.add(kw)
+        kw_tokens = kw.split()
+        pool.update(kw_tokens)
+        for i in range(len(kw_tokens) - 1):
+            pool.add(kw_tokens[i] + kw_tokens[i + 1])
+    return pool
+
+
+def filter_to_pool(name: str, pool: set[str]) -> str:
+    """pool에 없는 단어를 제거합니다."""
+    kept = [w for w in name.split() if w in pool]
+    return re.sub(r'\s+', ' ', ' '.join(kept)).strip()
 
 
 # ── 1단계: 키워드 후보 에이전트 ────────────────────────────────────
