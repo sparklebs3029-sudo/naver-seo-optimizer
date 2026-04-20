@@ -23,6 +23,8 @@ from naver_seo_agent import (
 )
 from orchestrator import run_with_orchestration, OrchestratorReport
 
+APP_VERSION = "v1.5.0"  # filter_to_pool 제거, 원본 품질 통과 허용
+
 st.set_page_config(
     page_title="셀러부스트",
     page_icon="🛒",
@@ -30,7 +32,7 @@ st.set_page_config(
 )
 
 st.title("셀러부스트")
-st.caption("네이버 SEO 상품명 최적화 + 트렌드 상품 소싱")
+st.caption(f"네이버 SEO 상품명 최적화 + 트렌드 상품 소싱  |  {APP_VERSION}")
 
 # ── API 키 영구 저장/로드 (사용자 홈 디렉터리) ──────────────────────
 _KEYS_PATH = pathlib.Path.home() / ".sellerboost" / "keys.json"
