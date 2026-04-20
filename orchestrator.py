@@ -21,6 +21,11 @@ from naver_seo_agent import (
     fallback_by_shopping_search, strip_product_code,
 )
 
+ATTRIBUTE_WORDS = [
+    "긴팔", "반팔", "민소매", "긴바지", "반바지",
+    "면", "레이스", "실크", "니트", "데님", "린넨", "폴리", "쉬폰", "벨벳", "가죽", "플리스", "울", "캐시미어",
+    "프릴", "리본", "체크", "스트라이프", "도트",
+]
 
 # ── 데이터 클래스 ────────────────────────────────────────────────────
 
@@ -129,13 +134,19 @@ def validate_result(
             failures.append(f"배송 관련 문구 잔존: '{term}'")
             break
 
-    # 4. 검수 단계 자체 지적 사항 (규칙 위반 언급이 있을 때만 실패 처리)
+    # 4. 원본에 없는 속성 단어 추가 여부 (규칙 기반)
+    for word in ATTRIBUTE_WORDS:
+        if word in final_name and word not in original:
+            failures.append(f"원본에 없는 속성 추가: '{word}' — 원본에 있는 속성만 사용하세요")
+            break
+
+    # 5. 검수 단계 자체 지적 사항 (규칙 위반 언급이 있을 때만 실패 처리)
     if issues:
         violation_keywords = ("금지", "위반", "제거", "포함", "초과", "미만", "브랜드", "배송", "홍보")
         if any(kw in issues for kw in violation_keywords):
             failures.append(f"검수 지적 사항 미해결: {issues[:80]}")
 
-    # 5. AI 기반 상품 유형 일치 여부 (기본 규칙 통과 시에만 실행하여 비용 절감)
+    # 6. AI 기반 상품 유형 일치 여부 (기본 규칙 통과 시에만 실행하여 비용 절감)
     if not failures:
         try:
             prompt = (
