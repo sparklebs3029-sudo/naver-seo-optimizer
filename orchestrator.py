@@ -208,6 +208,7 @@ def run_with_orchestration(
     last_final_name = original_clean
     word_pool: set[str] = set(original_clean.split())
     feedback = ""
+    prev_same_as_original = False  # 이전 시도가 "원본과 동일" 실패였는지 추적
 
     for attempt in range(1, max_retries + 1):
         stage = ""
@@ -235,22 +236,24 @@ def run_with_orchestration(
             core_keywords, aux_words = classify_keywords(top_keywords, original_clean, classify_model)
             _progress(attempt, "2.5/4 키워드 분류 완료", f"핵심: {core_keywords} / 보조: {aux_words}")
 
-            # Stage 3: 최적화 → pool 필터 적용
+            # Stage 3: 최적화
+            # 이전 시도가 "원본과 동일" 실패였으면 pool 필터를 건너뜀
+            # (filter_to_pool이 새 키워드를 제거해 원본으로 돌아가는 악순환 방지)
             stage = "상품명 최적화"
             _progress(attempt, "3/4 상품명 최적화 중...", f"핵심키워드: {', '.join(core_keywords)}")
             optimized = optimize_name(original_clean, core_keywords, aux_words, optimize_model)
-            cleaned   = filter_to_pool(clean_by_rules(optimized, original_clean), word_pool)
+            rule_cleaned = clean_by_rules(optimized, original_clean)
+            cleaned = rule_cleaned if prev_same_as_original else filter_to_pool(rule_cleaned, word_pool)
 
-            # Stage 4: 검수 → pool 필터 적용
+            # Stage 4: 검수
             stage = "검수"
             _progress(attempt, "4/4 검수 중...")
             final_name, issues = verify_name(original_clean, cleaned, verify_model)
-            final_name = filter_to_pool(final_name, word_pool)
+            if not prev_same_as_original:
+                final_name = filter_to_pool(final_name, word_pool)
             if len(final_name) < 25:
-                final_name = filter_to_pool(
-                    enforce_min_length(final_name, original_clean, top_keywords, optimize_model),
-                    word_pool,
-                )
+                extended = enforce_min_length(final_name, original_clean, top_keywords, optimize_model)
+                final_name = extended if prev_same_as_original else filter_to_pool(extended, word_pool)
 
             last_final_name = final_name
 
@@ -267,10 +270,11 @@ def run_with_orchestration(
                     errors=all_errors,
                 )
 
-            # 실패: 피드백 생성 후 재시도
+            # 실패: 다음 재시도를 위해 상태 업데이트
             failure_summary = "; ".join(failures)
             all_validation_failures.extend([f"[시도{attempt}] {f}" for f in failures])
             feedback = failure_summary
+            prev_same_as_original = any("원본 상품명과 동일" in f for f in failures)
 
         except Exception as e:
             err_report = analyze_error(stage, e)
