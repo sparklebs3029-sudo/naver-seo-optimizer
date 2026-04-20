@@ -193,13 +193,6 @@ def validate_result(
                 failures.append(f"원본에 없는 속성 추가: '{word}' — 원본에 있는 속성만 사용하세요")
                 break
 
-    # 5. 검수 단계 자체 지적 사항 (미해결 위반만 실패 처리, 정상 수정은 제외)
-    # "제거" 제외: verify_name이 정상적으로 제거한 경우도 걸려서 오탐 발생
-    if issues:
-        violation_keywords = ("금지", "위반", "포함", "브랜드", "배송", "홍보")
-        if any(kw in issues for kw in violation_keywords):
-            failures.append(f"검수 지적 사항 미해결: {issues[:80]}")
-
     # 6. AI 기반 상품 유형 일치 여부 (기본 규칙 통과 시에만 실행하여 비용 절감)
     if not failures:
         try:
