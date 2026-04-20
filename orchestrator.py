@@ -214,6 +214,7 @@ def run_with_orchestration(
             stage = "키워드 후보 생성"
             _progress(attempt, "1/4 키워드 후보 생성 및 카테고리 감지 중...", feedback and f"피드백 반영: {feedback[:40]}")
             candidates = generate_keyword_candidates(original_clean, keyword_model, feedback=feedback)
+            word_pool  = build_word_pool(original_clean, candidates)  # DataLab 실패해도 풀 확보
 
             stage = "카테고리 감지"
             category_id = detect_category(original_clean, keyword_model)
@@ -225,7 +226,7 @@ def run_with_orchestration(
             search_scores   = query_search_trend(candidates, naver_id, naver_secret)
             shopping_scores = query_shopping_insight(candidates, category_id, naver_id, naver_secret)
             top_keywords    = combine_and_select(search_scores, shopping_scores, candidates)
-            word_pool       = build_word_pool(original_clean, top_keywords)
+            word_pool       = build_word_pool(original_clean, top_keywords)  # DataLab 결과로 풀 갱신
 
             # Stage 2.5: 키워드 분류
             stage = "키워드 분류"
@@ -294,12 +295,8 @@ def run_with_orchestration(
                 original_clean, naver_id, naver_secret, optimize_model, classify_model
             )
             if fallback and _re.sub(r'\s+', '', fallback).lower() != clean_normalized:
-                fallback = filter_to_pool(fallback, word_pool)
                 if len(fallback) < 25:
-                    fallback = filter_to_pool(
-                        enforce_min_length(fallback, original_clean, [], optimize_model),
-                        word_pool,
-                    )
+                    fallback = enforce_min_length(fallback, original_clean, [], optimize_model)
                 if len(fallback) >= 25:
                     last_final_name = fallback
         except Exception:
