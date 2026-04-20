@@ -103,6 +103,7 @@ def validate_result(
     final_name: str,
     issues: str | None,
     model,
+    word_pool: set[str] | None = None,
 ) -> tuple[bool, list[str]]:
     """
     검수 완료된 결과의 품질을 재검증합니다.
@@ -135,11 +136,12 @@ def validate_result(
             failures.append(f"배송 관련 문구 잔존: '{term}'")
             break
 
-    # 4. 원본에 없는 속성 단어 추가 여부 (규칙 기반)
+    # 4. 원본에 없는 속성 단어 추가 여부 (word_pool에 있으면 DataLab 검증된 키워드이므로 허용)
     for word in ATTRIBUTE_WORDS:
         if word in final_name and word not in original:
-            failures.append(f"원본에 없는 속성 추가: '{word}' — 원본에 있는 속성만 사용하세요")
-            break
+            if word_pool is None or word not in word_pool:
+                failures.append(f"원본에 없는 속성 추가: '{word}' — 원본에 있는 속성만 사용하세요")
+                break
 
     # 5. 검수 단계 자체 지적 사항 (규칙 위반 언급이 있을 때만 실패 처리)
     if issues:
@@ -253,7 +255,7 @@ def run_with_orchestration(
             last_final_name = final_name
 
             # 오케스트레이터 품질 검증
-            passed, failures = validate_result(original_clean, final_name, issues, verify_model)
+            passed, failures = validate_result(original_clean, final_name, issues, verify_model, word_pool)
 
             if passed:
                 return final_name, OrchestratorReport(
