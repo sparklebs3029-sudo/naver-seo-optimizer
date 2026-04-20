@@ -7,14 +7,17 @@ import io
 import json
 import os
 import pathlib
+import threading
+import time
 import streamlit as st
 import google.generativeai as genai
 import openpyxl
 from openpyxl.utils import get_column_letter
 from datetime import datetime
+from dataclasses import dataclass, field
 
 from naver_seo_agent import (
-    KEYWORD_SYSTEM, OPTIMIZE_SYSTEM, VERIFY_SYSTEM, GEMINI_CONFIG,
+    KEYWORD_SYSTEM, CLASSIFY_SYSTEM, OPTIMIZE_SYSTEM, VERIFY_SYSTEM, GEMINI_CONFIG,
     NAVER_CATEGORIES, PROHIBITED_GROUPS,
     get_trending_products,
 )
@@ -73,6 +76,27 @@ if "keys_loaded" not in st.session_state:
 
 if "daily_file_count" not in st.session_state:
     st.session_state.daily_file_count = {}
+
+
+# ── 배치 처리 상태 클래스 ──────────────────────────────────────────
+@dataclass
+class _BatchState:
+    running:    bool               = False
+    stopped:    bool               = False
+    done:       bool               = False
+    progress:   int                = 0
+    total:      int                = 0
+    log:        list               = field(default_factory=list)
+    status:     str                = ""
+    all_reports: list              = field(default_factory=list)
+    hard_errors: list              = field(default_factory=list)
+    result_buf: bytes | None       = None
+    out_name:   str                = ""
+    stop_event: threading.Event    = field(default_factory=threading.Event)
+
+
+if "batch" not in st.session_state:
+    st.session_state.batch = _BatchState()
 
 # ── 사이드바: API 키 입력 ────────────────────────────────────────────
 with st.sidebar:
@@ -147,6 +171,7 @@ with tab1:
             genai.configure(api_key=gemini_key)
             models = {
                 'keyword':  genai.GenerativeModel("gemini-2.0-flash", system_instruction=KEYWORD_SYSTEM,  generation_config=GEMINI_CONFIG),
+                'classify': genai.GenerativeModel("gemini-2.0-flash", system_instruction=CLASSIFY_SYSTEM, generation_config=GEMINI_CONFIG),
                 'optimize': genai.GenerativeModel("gemini-2.0-flash", system_instruction=OPTIMIZE_SYSTEM, generation_config=GEMINI_CONFIG),
                 'verify':   genai.GenerativeModel("gemini-2.0-flash", system_instruction=VERIFY_SYSTEM,   generation_config=GEMINI_CONFIG),
             }
@@ -236,115 +261,148 @@ with tab1:
                 for _, name in data_rows_preview[:5]:
                     st.text(name)
 
-            btn_area  = st.empty()
-            start_btn = btn_area.button("최적화 시작", type="primary",
-                                        disabled=not keys_ready, use_container_width=True)
+            batch = st.session_state.batch
 
-            if start_btn:
-                btn_area.warning("처리 중입니다. 완료될 때까지 기다려주세요...")
+            # ── 시작 버튼 (처리 중이 아닐 때만 표시) ────────────────
+            if not batch.running:
+                start_btn = st.button("최적화 시작", type="primary",
+                                      disabled=not keys_ready, use_container_width=True)
+                if start_btn:
+                    from openpyxl.styles import PatternFill
+                    RETRY_FILL = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
+                    ERROR_FILL = PatternFill(start_color="FFDCD8", end_color="FFDCD8", fill_type="solid")
 
-                genai.configure(api_key=gemini_key)
-                models = {
-                    'keyword':  genai.GenerativeModel("gemini-2.0-flash", system_instruction=KEYWORD_SYSTEM,  generation_config=GEMINI_CONFIG),
-                    'optimize': genai.GenerativeModel("gemini-2.0-flash", system_instruction=OPTIMIZE_SYSTEM, generation_config=GEMINI_CONFIG),
-                    'verify':   genai.GenerativeModel("gemini-2.0-flash", system_instruction=VERIFY_SYSTEM,   generation_config=GEMINI_CONFIG),
-                }
-                api_keys = {'naver_id': naver_id, 'naver_secret': naver_secret}
+                    genai.configure(api_key=gemini_key)
+                    models = {
+                        'keyword':  genai.GenerativeModel("gemini-2.0-flash", system_instruction=KEYWORD_SYSTEM,  generation_config=GEMINI_CONFIG),
+                        'classify': genai.GenerativeModel("gemini-2.0-flash", system_instruction=CLASSIFY_SYSTEM, generation_config=GEMINI_CONFIG),
+                        'optimize': genai.GenerativeModel("gemini-2.0-flash", system_instruction=OPTIMIZE_SYSTEM, generation_config=GEMINI_CONFIG),
+                        'verify':   genai.GenerativeModel("gemini-2.0-flash", system_instruction=VERIFY_SYSTEM,   generation_config=GEMINI_CONFIG),
+                    }
+                    api_keys = {'naver_id': naver_id, 'naver_secret': naver_secret}
 
-                wb = openpyxl.load_workbook(io.BytesIO(raw_bytes))
-                ws = wb.active
+                    wb = openpyxl.load_workbook(io.BytesIO(raw_bytes))
+                    ws = wb.active
+                    data_rows = [
+                        (r, str(ws.cell(row=r, column=selected_col_idx).value).strip())
+                        for r in range(2, ws.max_row + 1)
+                        if ws.cell(row=r, column=selected_col_idx).value
+                        and str(ws.cell(row=r, column=selected_col_idx).value).strip()
+                    ]
 
-                from openpyxl.styles import PatternFill
-                RETRY_FILL = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
-                ERROR_FILL = PatternFill(start_color="FFDCD8", end_color="FFDCD8", fill_type="solid")
+                    # 파일명은 메인 스레드에서 미리 계산 (스레드에서 session_state 쓰기 금지)
+                    now          = datetime.now()
+                    datetime_str = now.strftime("%Y%m%d%H%M")
+                    today_str    = now.strftime("%Y%m%d")
+                    if today_str not in st.session_state.daily_file_count:
+                        st.session_state.daily_file_count = {today_str: 0}
+                    st.session_state.daily_file_count[today_str] += 1
+                    n        = st.session_state.daily_file_count[today_str]
+                    stem     = os.path.splitext(uploaded_file.name)[0]
+                    out_name = f"{stem}_최적화_{datetime_str}_{n}.xlsx"
 
-                data_rows = [
-                    (r, str(ws.cell(row=r, column=selected_col_idx).value).strip())
-                    for r in range(2, ws.max_row + 1)
-                    if ws.cell(row=r, column=selected_col_idx).value
-                    and str(ws.cell(row=r, column=selected_col_idx).value).strip()
-                ]
+                    new_batch = _BatchState(total=len(data_rows), running=True, out_name=out_name)
+                    st.session_state.batch = new_batch
 
-                progress_bar = st.progress(0, text="처리 준비 중...")
-                status_box   = st.empty()
-                log_entries: list[str] = []
-                log_box      = st.empty()
-                all_reports: list[OrchestratorReport] = []
-                hard_errors: list[dict] = []  # 자동 해결 불가 오류
+                    def _run_batch(state: _BatchState, drows, _models, _api_keys, _wb, _ws, _col_idx):
+                        from openpyxl.styles import PatternFill as PF
+                        retry_fill = PF(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
+                        error_fill = PF(start_color="FFDCD8", end_color="FFDCD8", fill_type="solid")
 
-                for i, (row_idx, original) in enumerate(data_rows, 1):
-                    pct     = i / len(data_rows)
-                    preview = original[:40] + ("..." if len(original) > 40 else "")
+                        for i, (row_idx, original) in enumerate(drows, 1):
+                            if state.stop_event.is_set():
+                                state.status  = f"중단됨 — {i - 1}개 완료"
+                                state.stopped = True
+                                break
 
-                    def batch_progress(attempt: int, stage: str, detail: str = "", _i=i, _total=len(data_rows), _preview=preview) -> None:
-                        prefix = f"[시도{attempt}] " if attempt > 1 else ""
-                        progress_bar.progress(pct, text=f"[{_i}/{_total}] {prefix}{stage}")
-                        status_box.info(f"**[{_i}/{_total}]** `{_preview}`  \n{prefix}{stage}" + (f" — {detail}" if detail else ""))
+                            def _prog(attempt, stage, detail="", _i=i, _t=len(drows)):
+                                prefix = f"[시도{attempt}] " if attempt > 1 else ""
+                                state.status = f"[{_i}/{_t}] {prefix}{stage}" + (f" — {detail}" if detail else "")
 
-                    final_name, report = run_with_orchestration(
-                        original, models, api_keys,
-                        max_retries=3,
-                        progress_callback=batch_progress,
+                            final_name, report = run_with_orchestration(
+                                original, _models, _api_keys,
+                                max_retries=3,
+                                progress_callback=_prog,
+                            )
+                            state.all_reports.append(report)
+                            _ws.cell(row=row_idx, column=_col_idx).value = final_name
+
+                            cell = _ws.cell(row=row_idx, column=_col_idx)
+                            unresolved = [e for e in report.errors if not e.resolved]
+                            if unresolved:
+                                cell.fill = error_fill
+                                state.hard_errors.append({"행": row_idx, "원본": original, "보고서": report})
+                            elif report.attempts > 1:
+                                cell.fill = retry_fill
+
+                            retry_note = f" (재시도 {report.attempts}회)" if report.attempts > 1 else ""
+                            warn_note  = " ⚠️" if not report.passed_validation else ""
+                            state.log.append(
+                                f"[{i}/{len(drows)}]{retry_note}{warn_note}\n"
+                                f"  원본 : {original}\n"
+                                f"  최종 : {final_name}  ({len(final_name)}자)"
+                            )
+                            state.progress = i
+
+                        buf = io.BytesIO()
+                        _wb.save(buf)
+                        buf.seek(0)
+                        state.result_buf = buf.read()
+                        state.running    = False
+                        state.done       = True
+
+                    t = threading.Thread(
+                        target=_run_batch,
+                        args=(new_batch, data_rows, models, api_keys, wb, ws, selected_col_idx),
+                        daemon=True,
                     )
-                    all_reports.append(report)
+                    t.start()
+                    st.rerun()
 
-                    ws.cell(row=row_idx, column=selected_col_idx).value = final_name
+            # ── 처리 중 UI ────────────────────────────────────────────
+            if batch.running:
+                pct = batch.progress / batch.total if batch.total else 0
+                st.progress(pct, text=batch.status or "처리 준비 중...")
 
-                    # 재시도 발생 행: 노란색, 오류 있는 행: 연한 빨간색
-                    cell = ws.cell(row=row_idx, column=selected_col_idx)
-                    unresolved_errors = [e for e in report.errors if not e.resolved]
-                    if unresolved_errors:
-                        cell.fill = ERROR_FILL
-                        hard_errors.append({"행": row_idx, "원본": original, "보고서": report})
-                    elif report.attempts > 1:
-                        cell.fill = RETRY_FILL
+                if st.button("⛔ 중단", type="secondary", use_container_width=True):
+                    batch.stop_event.set()
 
-                    # 로그 작성
-                    retry_note = f" (재시도 {report.attempts}회)" if report.attempts > 1 else ""
-                    warn_note  = " ⚠️" if not report.passed_validation else ""
-                    log_entries.append(
-                        f"[{i}/{len(data_rows)}]{retry_note}{warn_note}\n"
-                        f"  원본 : {original}\n"
-                        f"  최종 : {final_name}  ({len(final_name)}자)"
-                    )
-                    log_box.text_area("처리 로그", "\n\n".join(log_entries[-8:]),
-                                      height=300, label_visibility="collapsed")
+                if batch.log:
+                    st.text_area("처리 로그", "\n\n".join(batch.log[-8:]),
+                                 height=300, label_visibility="collapsed")
+                time.sleep(1)
+                st.rerun()
 
+            # ── 완료 / 중단 후 결과 표시 ─────────────────────────────
+            if (batch.done or batch.stopped) and batch.result_buf:
+                all_reports  = batch.all_reports
+                hard_errors  = batch.hard_errors
                 success_count = sum(1 for r in all_reports if not [e for e in r.errors if not e.resolved])
                 retry_count   = sum(1 for r in all_reports if r.attempts > 1)
 
-                progress_bar.progress(1.0, text="완료!")
-                status_box.success(
-                    f"처리 완료: {success_count}개 성공 / {len(hard_errors)}개 오류"
-                    + (f" / {retry_count}개 재시도 발생" if retry_count else "")
-                )
-                btn_area.empty()
-
-                buf = io.BytesIO()
-                wb.save(buf)
-                buf.seek(0)
-
-                now          = datetime.now()
-                datetime_str = now.strftime("%Y%m%d%H%M")
-                today_str    = now.strftime("%Y%m%d")
-
-                if today_str not in st.session_state.daily_file_count:
-                    st.session_state.daily_file_count = {today_str: 0}
-                st.session_state.daily_file_count[today_str] += 1
-                n = st.session_state.daily_file_count[today_str]
-
-                stem     = os.path.splitext(uploaded_file.name)[0]
-                out_name = f"{stem}_최적화_{datetime_str}_{n}.xlsx"
+                if batch.stopped:
+                    st.warning(batch.status)
+                else:
+                    st.success(
+                        f"처리 완료: {success_count}개 성공 / {len(hard_errors)}개 오류"
+                        + (f" / {retry_count}개 재시도 발생" if retry_count else "")
+                    )
 
                 st.divider()
-                st.download_button("결과 엑셀 다운로드", data=buf, file_name=out_name,
-                                   mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                   type="primary", use_container_width=True)
+                st.download_button(
+                    "결과 엑셀 다운로드", data=batch.result_buf, file_name=batch.out_name,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary", use_container_width=True,
+                )
+
+                if st.button("새 파일 처리", use_container_width=True):
+                    st.session_state.batch = _BatchState()
+                    st.rerun()
 
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("전체", len(data_rows))
-                c2.metric("성공", success_count)
-                c3.metric("오류", len(hard_errors))
+                c1.metric("전체",   batch.progress)
+                c2.metric("성공",   success_count)
+                c3.metric("오류",   len(hard_errors))
                 c4.metric("재시도", retry_count)
 
                 if hard_errors:
@@ -373,7 +431,7 @@ with tab1:
                             if r.validation_failures:
                                 st.caption("실패 이유: " + " / ".join(r.validation_failures[:2]))
 
-                if not hard_errors and retry_count == 0:
+                if not hard_errors and retry_count == 0 and batch.done:
                     st.success("특이 사항 없음. 모든 상품명이 정상 최적화되었습니다.")
 
         else:
