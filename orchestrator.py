@@ -158,6 +158,12 @@ def validate_result(
     # 0. 원본과 동일 여부
     import re as _re
     if _re.sub(r'\s+', '', final_name).lower() == _re.sub(r'\s+', '', original).lower():
+        # 원본이 이미 품질 기준을 통과하면 그대로 수용 (불필요한 재시도 방지)
+        length = len(final_name)
+        has_promo    = any(w in final_name for w in PROMO_WORDS)
+        has_delivery = any(t in final_name for t in DELIVERY_TERMS)
+        if 25 <= length <= 50 and not has_promo and not has_delivery:
+            return True, []
         failures.append("원본 상품명과 동일: 인기 키워드를 활용해 새롭게 최적화하세요")
         return False, failures
 
