@@ -259,7 +259,6 @@ def run_with_orchestration(
     last_final_name = original_clean
     word_pool: set[str] = set(original_clean.split())
     feedback = ""
-    prev_same_as_original = False  # 이전 시도가 "원본과 동일" 실패였는지 추적
 
     for attempt in range(1, max_retries + 1):
         stage = ""
@@ -288,22 +287,16 @@ def run_with_orchestration(
             _progress(attempt, "2.5/4 키워드 분류 완료", f"핵심: {core_keywords} / 보조: {aux_words}")
 
             # Stage 3: 최적화
-            # 이전 시도가 "원본과 동일" 실패였으면 pool 필터를 건너뜀
-            # (filter_to_pool이 새 키워드를 제거해 원본으로 돌아가는 악순환 방지)
             stage = "상품명 최적화"
             _progress(attempt, "3/4 상품명 최적화 중...", f"핵심키워드: {', '.join(core_keywords)}")
             optimized = optimize_name(original_clean, core_keywords, aux_words, optimize_model)
-            rule_cleaned = clean_by_rules(optimized, original_clean)
-            cleaned = rule_cleaned if prev_same_as_original else filter_to_pool(rule_cleaned, word_pool)
+            cleaned = clean_by_rules(optimized, original_clean)
 
             # Stage 4: 검수
             stage = "검수"
             _progress(attempt, "4/4 검수 중...")
             final_name, issues = verify_name(original_clean, cleaned, verify_model, allowed_keywords=top_keywords)
-            if not prev_same_as_original:
-                final_name = filter_to_pool(final_name, word_pool)
             if len(final_name) < 25:
-                # enforce_min_length는 단어를 추가하는 목적이므로 filter_to_pool 미적용
                 final_name = enforce_min_length(final_name, original_clean, top_keywords, optimize_model)
 
             last_final_name = final_name
@@ -322,11 +315,10 @@ def run_with_orchestration(
                     errors=all_errors,
                 )
 
-            # 실패: 다음 재시도를 위해 상태 업데이트
+            # 실패: 피드백 생성 후 재시도
             failure_summary = "; ".join(failures)
             all_validation_failures.extend([f"[시도{attempt}] {f}" for f in failures])
             feedback = failure_summary
-            prev_same_as_original = any("원본 상품명과 동일" in f for f in failures)
 
         except Exception as e:
             err_report = analyze_error(stage, e)
