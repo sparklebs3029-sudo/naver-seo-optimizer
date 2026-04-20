@@ -248,7 +248,7 @@ def run_with_orchestration(
             # Stage 4: 검수
             stage = "검수"
             _progress(attempt, "4/4 검수 중...")
-            final_name, issues = verify_name(original_clean, cleaned, verify_model)
+            final_name, issues = verify_name(original_clean, cleaned, verify_model, allowed_keywords=top_keywords)
             if not prev_same_as_original:
                 final_name = filter_to_pool(final_name, word_pool)
             if len(final_name) < 25:

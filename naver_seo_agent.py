@@ -452,7 +452,12 @@ def enforce_min_length(name: str, original: str, top_keywords: list[str], model:
     return result if len(result) >= 25 else name
 
 
-def verify_name(original: str, optimized: str, model: genai.GenerativeModel) -> tuple[str, str | None]:
+def verify_name(
+    original: str,
+    optimized: str,
+    model: genai.GenerativeModel,
+    allowed_keywords: list[str] | None = None,
+) -> tuple[str, str | None]:
     length = len(optimized)
     length_note = ""
     if length < 25:
@@ -460,21 +465,29 @@ def verify_name(original: str, optimized: str, model: genai.GenerativeModel) -> 
     elif length > 50:
         length_note = f"현재 {length}자로 너무 깁니다. 50자 이하로 줄여주세요."
 
+    allowed_section = ""
+    if allowed_keywords:
+        kw_str = ", ".join(allowed_keywords[:10])
+        allowed_section = (
+            f"\n⭐ 네이버 DataLab 검증 키워드 (절대 제거 금지): {kw_str}\n"
+            "   — 위 키워드는 원본에 없더라도 반드시 유지하세요.\n"
+        )
+
     prompt = (
         "아래 최적화된 상품명을 검수하고 필요시 수정해주세요.\n\n"
         f"원본 상품명: {original}\n"
         f"최적화된 상품명: {optimized}\n"
-        f"{('⚠️ 글자수 조정 필요: ' + length_note) if length_note else ''}\n\n"
+        f"{('⚠️ 글자수 조정 필요: ' + length_note) if length_note else ''}"
+        f"{allowed_section}\n"
         "검수 기준:\n"
         "1. 의미 없는 수식어 제거 (최고, 대박, 완전, 특가, 강추 등)\n"
         "2. 중복 단어 제거\n"
         "3. 원본 상품명에 없는 무관한 브랜드명 제거 (원본에 있는 브랜드는 유지)\n"
-        "4. 원본 상품과 관련 없는 키워드 제거\n"
+        "4. 원본 상품과 완전히 무관한 키워드 제거 (DataLab 검증 키워드는 제외)\n"
         "5. 네이버 금지 표현 제거\n"
         "6. 공백 포함 25자 이상 50자 이하 유지 — 절대 25자 미만으로 줄이지 말 것\n"
-        "7. 원본에 없는 소재·형태·디자인 속성 제거\n"
-        "   — 원본에 없는데 추가된 예: 긴팔, 반팔, 레이스, 프릴, 면, 실크, 니트 등\n"
-        "   — 이런 단어가 있으면 반드시 제거하고 issues에 명시\n\n"
+        "7. 원본에 없는 소재·형태·디자인 속성은 제거하되, DataLab 검증 키워드는 예외\n"
+        "   — DataLab 검증 키워드가 아닌 예: 긴팔, 반팔, 레이스, 면, 실크, 니트 등\n\n"
         "다음 JSON 형식으로만 답변하세요:\n"
         '{"final_name": "최종 상품명", "issues": "수정 사항 설명 (없으면 null)"}'
     )
