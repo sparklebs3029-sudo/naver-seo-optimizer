@@ -15,6 +15,7 @@ import openpyxl
 from openpyxl.utils import get_column_letter
 from datetime import datetime
 from dataclasses import dataclass, field
+from streamlit_cookies_controller import CookieController
 
 from naver_seo_agent import (
     KEYWORD_SYSTEM, CLASSIFY_SYSTEM, OPTIMIZE_SYSTEM, VERIFY_SYSTEM, GEMINI_CONFIG,
@@ -34,31 +35,31 @@ st.set_page_config(
 st.title("셀러부스트")
 st.caption(f"네이버 SEO 상품명 최적화 + 트렌드 상품 소싱  |  {APP_VERSION}")
 
-# ── API 키 영구 저장/로드 (사용자 홈 디렉터리) ──────────────────────
-_KEYS_PATH = pathlib.Path.home() / ".sellerboost" / "keys.json"
+# ── 쿠키 컨트롤러 (브라우저에 API 키 영구 저장) ──────────────────────
+_cookies = CookieController()
 
-def _load_saved_keys() -> dict:
-    try:
-        return json.loads(_KEYS_PATH.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
+def _load_cookie_keys() -> dict:
+    g = _cookies.get("sb_gemini") or ""
+    n = _cookies.get("sb_naver_id") or ""
+    s = _cookies.get("sb_naver_secret") or ""
+    if g or n:
+        return {"gemini_key": g, "naver_id": n, "naver_secret": s}
+    return {}
 
 def _save_keys(gemini: str, naver_id: str, secret: str) -> None:
-    _KEYS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _KEYS_PATH.write_text(
-        json.dumps({"gemini_key": gemini, "naver_id": naver_id, "naver_secret": secret}),
-        encoding="utf-8",
-    )
+    max_age = 365 * 24 * 3600  # 1년
+    _cookies.set("sb_gemini",        gemini,  max_age=max_age)
+    _cookies.set("sb_naver_id",      naver_id, max_age=max_age)
+    _cookies.set("sb_naver_secret",  secret,   max_age=max_age)
 
 def _delete_keys() -> None:
-    try:
-        _KEYS_PATH.unlink()
-    except Exception:
-        pass
+    _cookies.remove("sb_gemini")
+    _cookies.remove("sb_naver_id")
+    _cookies.remove("sb_naver_secret")
 
 # ── 세션 상태 초기화 (앱 첫 실행 시 저장된 키 자동 로드) ────────────
 if "keys_loaded" not in st.session_state:
-    # Streamlit Secrets 우선 (클라우드 배포), 없으면 로컬 파일
+    # Streamlit Secrets 우선 (클라우드 배포), 없으면 브라우저 쿠키
     _from_secrets = {}
     try:
         _g = st.secrets.get("GEMINI_API_KEY", "")
@@ -69,7 +70,7 @@ if "keys_loaded" not in st.session_state:
     except Exception:
         pass
 
-    _saved = _from_secrets or _load_saved_keys()
+    _saved = _from_secrets or _load_cookie_keys()
     st.session_state.gemini_key   = _saved.get("gemini_key",   "")
     st.session_state.naver_id     = _saved.get("naver_id",     "")
     st.session_state.naver_secret = _saved.get("naver_secret", "")
