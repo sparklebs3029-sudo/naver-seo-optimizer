@@ -8,6 +8,7 @@ import io
 import json
 import os
 import pathlib
+import secrets
 import threading
 import time
 from mimetypes import guess_extension
@@ -25,7 +26,9 @@ from naver_seo_agent import (
     get_trending_products,
 )
 from orchestrator import run_with_orchestration, OrchestratorReport
+from image_editor import image_editor as render_image_editor
 from image_editor.backend import DriveUploadError, export_xlsx, load_xlsx, upload_to_drive
+from image_editor.backend import delete_drive_file, fetch_image_as_b64, update_drive_file
 
 APP_VERSION = "v1.8.0"  # 이미지 수정 탭 추가
 
@@ -100,6 +103,8 @@ if "daily_file_count" not in st.session_state:
 for _k, _v in [
     ("image_editor_saved_data", {}),
     ("image_editor_last_file_name", ""),
+    ("image_editor_action_result", None),
+    ("image_editor_ui_state", {}),
 ]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
@@ -123,6 +128,50 @@ def _image_summary(product: dict) -> str:
     cl_state = "O" if product.get("img_cl") else "-"
     cm_state = "O" if product.get("img_cm") else "-"
     return f"{product['prod_no']} | {product['prod_name']} | CL:{cl_state} CM:{cm_state} 상세:{detail_count}"
+
+
+def _build_image_action_result(action: str, ok: bool = True, **extra) -> dict:
+    return {
+        "action": action,
+        "ok": ok,
+        "request_id": extra.pop("request_id", secrets.token_hex(8)),
+        **extra,
+    }
+
+
+def _save_editor_image(prod_no: str, filename: str, data_url: str, saved_data: dict) -> dict:
+    prev = saved_data.get(prod_no, {})
+
+    if prev.get("main_file_id"):
+        uploaded = update_drive_file(prev["main_file_id"], filename, data_url)
+    else:
+        uploaded = upload_to_drive(filename, data_url)
+
+    next_entry = {
+        **prev,
+        "main_file_id": uploaded["file_id"],
+        "main_url": uploaded["public_url"],
+        "cl_url": uploaded["public_url"],
+        "cm_url": uploaded["public_url"],
+        "cl_file_id": uploaded["file_id"],
+        "cm_file_id": uploaded["file_id"],
+    }
+    saved_data[prod_no] = next_entry
+
+    stale_ids = {
+        prev.get("main_file_id"),
+        prev.get("cl_file_id"),
+        prev.get("cm_file_id"),
+    }
+    stale_ids.discard(uploaded["file_id"])
+    for file_id in stale_ids:
+        if file_id:
+            try:
+                delete_drive_file(file_id)
+            except Exception:
+                pass
+
+    return next_entry
 
 
 # ── 배치 처리 상태 클래스 ──────────────────────────────────────────
@@ -614,7 +663,7 @@ with tab2:
 # ════════════════════════════════════════════════════════════════════
 with tab3:
     st.subheader("상품 이미지 수정")
-    st.caption("샵플링 엑셀을 불러와 상품별 대표 이미지를 교체하고, Drive 업로드 후 결과 엑셀을 다시 내려받습니다.")
+    st.caption("기존 이미지 편집기 UI를 Streamlit 안에 반영했습니다. 상세 이미지에서 편집 후 Save and next로 Drive 저장하세요.")
 
     uploaded_image_file = st.file_uploader(
         "이미지 수정용 엑셀 업로드 (.xlsx)",
@@ -647,119 +696,84 @@ with tab3:
             )
 
             if editable_products:
-                selected_idx = st.selectbox(
-                    "수정할 상품 선택",
-                    range(len(editable_products)),
-                    format_func=lambda idx: _image_summary(editable_products[idx]),
-                    key="image_editor_selected_idx",
-                )
-                product = editable_products[selected_idx]
-                prod_no = product["prod_no"]
-                saved_data = st.session_state.image_editor_saved_data
-                current_saved = saved_data.get(prod_no, {})
-
-                st.markdown(f"**상품번호**: `{prod_no}`")
-                st.markdown(f"**상품명**: {product.get('prod_name') or '-'}")
-
-                preview_cols = st.columns(2)
-                image_slots = [
-                    ("cl", "대표 이미지(CL)", product.get("img_cl")),
-                    ("cm", "부가 이미지(CM)", product.get("img_cm")),
-                ]
-                for idx, (slot_key, label, original_url) in enumerate(image_slots):
-                    with preview_cols[idx]:
-                        applied_url = current_saved.get(f"{slot_key}_url") or original_url
-                        st.markdown(f"**{label}**")
-                        if applied_url:
-                            st.image(applied_url, use_container_width=True)
-                            st.caption(applied_url)
-                        else:
-                            st.caption("현재 등록된 이미지가 없습니다.")
-
-                detail_imgs = product.get("detail_imgs") or []
-                if detail_imgs:
-                    with st.expander(f"상세 이미지 URL {len(detail_imgs)}개 보기"):
-                        for url in detail_imgs:
-                            st.code(url, language=None)
-
-                new_cl_file = st.file_uploader(
-                    "새 대표 이미지(CL)",
-                    type=["png", "jpg", "jpeg", "webp"],
-                    key=f"image_editor_cl_{prod_no}",
-                )
-                new_cm_file = st.file_uploader(
-                    "새 부가 이미지(CM)",
-                    type=["png", "jpg", "jpeg", "webp"],
-                    key=f"image_editor_cm_{prod_no}",
+                component_action = render_image_editor(
+                    products=editable_products,
+                    action_result=st.session_state.image_editor_action_result,
+                    saved_data=st.session_state.image_editor_saved_data,
+                    ui_state=st.session_state.image_editor_ui_state,
+                    key="image_editor_component",
                 )
 
-                save_disabled = not (new_cl_file or new_cm_file)
-                if st.button("이 상품 이미지 저장", type="primary", use_container_width=True, disabled=save_disabled):
-                    updated_entry = dict(current_saved)
+                if component_action:
+                    request_id = component_action.get("request_id", secrets.token_hex(8))
+                    st.session_state.image_editor_ui_state = component_action.get("ui_state", {})
+                    action = component_action.get("action")
 
                     try:
-                        if new_cl_file:
-                            cl_data_url = (
-                                f"data:{new_cl_file.type or 'image/png'};base64,"
-                                f"{base64.b64encode(new_cl_file.getvalue()).decode('ascii')}"
+                        if action == "fetch_image":
+                            data_url = fetch_image_as_b64(component_action["url"])
+                            st.session_state.image_editor_action_result = _build_image_action_result(
+                                "fetch_image",
+                                request_id=request_id,
+                                url=component_action.get("url"),
+                                thumb_idx=component_action.get("thumb_idx", 0),
+                                data_url=data_url,
                             )
-                            cl_uploaded = upload_to_drive(
-                                _build_drive_filename(prod_no, "CL", new_cl_file),
-                                cl_data_url,
+                        elif action == "save_image":
+                            prod_no = str(component_action["prod_no"])
+                            filename = component_action.get("filename") or f"{prod_no}_main.jpg"
+                            saved_entry = _save_editor_image(
+                                prod_no,
+                                filename,
+                                component_action["data_url"],
+                                st.session_state.image_editor_saved_data,
                             )
-                            updated_entry["cl_url"] = cl_uploaded["public_url"]
-
-                        if new_cm_file:
-                            cm_data_url = (
-                                f"data:{new_cm_file.type or 'image/png'};base64,"
-                                f"{base64.b64encode(new_cm_file.getvalue()).decode('ascii')}"
+                            current_idx = int(st.session_state.image_editor_ui_state.get("selected_index", 0))
+                            next_idx = min(current_idx + 1, len(editable_products) - 1)
+                            st.session_state.image_editor_action_result = _build_image_action_result(
+                                "save_image",
+                                request_id=request_id,
+                                filename=filename,
+                                prod_no=prod_no,
+                                preview_data_url=component_action.get("preview_data_url"),
+                                cl_url=saved_entry.get("cl_url"),
+                                cm_url=saved_entry.get("cm_url"),
+                                next_index=next_idx if current_idx < len(editable_products) - 1 else current_idx,
+                                saved_data=st.session_state.image_editor_saved_data,
                             )
-                            cm_uploaded = upload_to_drive(
-                                _build_drive_filename(prod_no, "CM", new_cm_file),
-                                cm_data_url,
+                        elif action == "export_xlsx":
+                            out_name = f"{pathlib.Path(uploaded_image_file.name).stem}_이미지수정.xlsx"
+                            file_bytes = export_xlsx(image_xlsx_bytes, st.session_state.image_editor_saved_data)
+                            st.session_state.image_editor_action_result = _build_image_action_result(
+                                "export_xlsx",
+                                request_id=request_id,
+                                filename=out_name,
+                                file_b64=base64.b64encode(file_bytes).decode("ascii"),
                             )
-                            updated_entry["cm_url"] = cm_uploaded["public_url"]
-
-                        saved_data[prod_no] = updated_entry
-                        st.session_state.image_editor_saved_data = saved_data
-                        st.success("이미지를 저장하고 Drive URL을 엑셀 반영 대상에 등록했습니다.")
+                        st.rerun()
                     except DriveUploadError as exc:
-                        st.error(f"Drive 업로드 오류: {exc}")
-                    except Exception as exc:
-                        st.error(f"이미지 저장 중 오류가 발생했습니다: {exc}")
-
-                if current_saved:
-                    st.caption(
-                        "현재 반영 예정 URL "
-                        f"CL: {current_saved.get('cl_url', '-')} / CM: {current_saved.get('cm_url', '-')}"
-                    )
-
-                if saved_data:
-                    st.divider()
-                    st.markdown(f"**반영 대기 상품 수**: {len(saved_data)}개")
-                    for saved_prod_no, saved_info in saved_data.items():
-                        st.write(
-                            f"- {saved_prod_no} | "
-                            f"CL {'등록' if saved_info.get('cl_url') else '-'} / "
-                            f"CM {'등록' if saved_info.get('cm_url') else '-'}"
+                        st.session_state.image_editor_action_result = _build_image_action_result(
+                            action or "unknown",
+                            ok=False,
+                            request_id=request_id,
+                            error=str(exc),
                         )
-
-                    export_name = f"{pathlib.Path(uploaded_image_file.name).stem}_이미지수정.xlsx"
-                    try:
-                        result_xlsx = export_xlsx(image_xlsx_bytes, saved_data)
-                        st.download_button(
-                            "수정된 엑셀 다운로드",
-                            data=result_xlsx,
-                            file_name=export_name,
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            type="primary",
-                            use_container_width=True,
-                        )
+                        st.rerun()
                     except Exception as exc:
-                        st.error(f"엑셀 생성 중 오류가 발생했습니다: {exc}")
+                        st.session_state.image_editor_action_result = _build_image_action_result(
+                            action or "unknown",
+                            ok=False,
+                            request_id=request_id,
+                            error=str(exc),
+                        )
+                        st.rerun()
 
+                if st.session_state.image_editor_saved_data:
+                    st.caption(f"현재 반영 대기 상품 수: {len(st.session_state.image_editor_saved_data)}개")
                     if st.button("이미지 수정 작업 초기화", use_container_width=True):
                         st.session_state.image_editor_saved_data = {}
+                        st.session_state.image_editor_action_result = None
+                        st.session_state.image_editor_ui_state = {}
                         st.rerun()
             else:
                 st.warning("엑셀에서 이미지 정보가 있는 상품을 찾지 못했습니다.")

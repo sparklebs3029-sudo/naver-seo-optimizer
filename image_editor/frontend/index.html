@@ -1,0 +1,910 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Image Editor</title>
+  <script src="https://unpkg.com/streamlit-component-lib@2.0.0/dist/index.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: "Malgun Gothic", sans-serif; background: #1e1e2e; color: #cdd6f4; height: 100vh; overflow: hidden; }
+    #app { display: flex; height: 100vh; }
+    #sidebar { width: 220px; flex-shrink: 0; background: #181825; border-right: 1px solid #313244; display: flex; flex-direction: column; }
+    #sb-head { padding: 12px; background: #11111b; border-bottom: 1px solid #313244; }
+    #sb-head h2 { font-size: 13px; color: #cba6f7; margin-bottom: 2px; }
+    #sb-stat { font-size: 11px; color: #6c7086; }
+    #sb-search { padding: 8px; border-bottom: 1px solid #313244; }
+    #sb-search input { width: 100%; padding: 6px 8px; background: #313244; border: 1px solid #45475a; border-radius: 5px; color: #cdd6f4; font-size: 12px; outline: none; }
+    #prod-list { flex: 1; overflow-y: auto; }
+    .pi { padding: 8px 12px; border-bottom: 1px solid #11111b; cursor: pointer; border-left: 3px solid transparent; }
+    .pi:hover { background: #313244; }
+    .pi.active { background: #2a2a3e; border-left-color: #cba6f7; }
+    .pi.done .pno::after { content: " done"; color: #a6e3a1; }
+    .pno { font-size: 10px; color: #6c7086; font-weight: 600; margin-bottom: 1px; }
+    .pname { font-size: 11px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+    #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+    #topbar { background: #11111b; padding: 8px 14px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #313244; flex-shrink: 0; }
+    #topbar .info { flex: 1; min-width: 0; }
+    #top-no { font-size: 10px; color: #6c7086; }
+    #top-nm { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .btn { padding: 5px 12px; border-radius: 5px; border: 1px solid #45475a; background: #313244; color: #cdd6f4; font-size: 11px; cursor: pointer; white-space: nowrap; }
+    .btn:hover { background: #45475a; }
+    .btn:disabled { opacity: .35; cursor: default; }
+    .btn.ok { background: #cba6f7; color: #11111b; border-color: #cba6f7; font-weight: 700; }
+
+    #workspace { flex: 1; display: flex; overflow: hidden; }
+    #left-panel { width: 220px; flex-shrink: 0; background: #181825; border-right: 1px solid #313244; display: flex; flex-direction: column; overflow: hidden; }
+    #compare-box { padding: 8px; border-bottom: 1px solid #313244; flex-shrink: 0; }
+    .cmp-title { font-size: 10px; color: #6c7086; font-weight: 600; margin-bottom: 6px; }
+    .cmp-row { display: flex; gap: 6px; }
+    .cmp-item { flex: 1; text-align: center; }
+    .cmp-label { font-size: 9px; color: #89b4fa; margin-bottom: 3px; font-weight: 600; }
+    .cmp-item img { width: 100%; border-radius: 4px; border: 1px solid #313244; background: #11111b; }
+    .cmp-none { font-size: 9px; color: #45475a; padding: 20px 0; }
+
+    #ptabs { display: flex; border-bottom: 1px solid #313244; }
+    .ptab { flex: 1; padding: 8px 4px; font-size: 11px; font-weight: 600; text-align: center; cursor: pointer; color: #6c7086; border-bottom: 2px solid transparent; }
+    .ptab.on { color: #cba6f7; border-bottom-color: #cba6f7; }
+    #html-tab { flex: 1; display: none; flex-direction: column; padding: 8px; overflow: hidden; }
+    #html-input { flex: 1; background: #313244; border: 1px solid #45475a; border-radius: 5px; color: #cdd6f4; font-size: 11px; font-family: monospace; padding: 7px; resize: none; outline: none; margin-bottom: 6px; }
+    #parse-btn { padding: 8px; background: #89b4fa; color: #11111b; border: none; border-radius: 5px; font-size: 12px; font-weight: 700; cursor: pointer; }
+    #imgs-tab { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+    #size-bar { padding: 7px 10px; border-bottom: 1px solid #313244; display: flex; align-items: center; gap: 8px; }
+    #size-bar label { font-size: 10px; color: #6c7086; }
+    #sz { flex: 1; accent-color: #cba6f7; }
+    #sz-num { font-size: 11px; color: #a6e3a1; min-width: 40px; text-align: right; font-weight: 600; }
+    #thumb-list { flex: 1; overflow-y: auto; padding: 8px; }
+    .tw { margin-bottom: 10px; }
+    .tw-lbl { font-size: 10px; color: #6c7086; margin-bottom: 3px; }
+    .th { cursor: pointer; border-radius: 5px; border: 2px solid transparent; background: #313244; overflow: hidden; display: block; }
+    .th:hover { border-color: #89b4fa; }
+    .th.sel { border-color: #cba6f7; }
+    .th img { display: block; width: 100%; height: auto; }
+
+    #editor { flex: 1; min-width: 0; display: flex; flex-direction: column; background: #1e1e2e; }
+    #canvas-wrap { flex: 1; overflow: auto; padding: 10px; }
+    #cv { display: none; cursor: crosshair; }
+    #no-msg { color: #45475a; font-size: 13px; text-align: center; padding: 20px; line-height: 3; }
+    #toolbar { background: #181825; border-top: 1px solid #313244; padding: 8px 10px; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+    .tg { display: flex; align-items: center; gap: 4px; }
+    .tl { font-size: 10px; color: #6c7086; white-space: nowrap; }
+    .tt { padding: 4px 10px; border: 1px solid #45475a; border-radius: 4px; background: #313244; color: #cdd6f4; font-size: 11px; cursor: pointer; white-space: nowrap; }
+    .tt:hover { background: #45475a; }
+    .tt.on { background: #cba6f7; color: #11111b; border-color: #cba6f7; }
+    .sep { width: 1px; height: 20px; background: #313244; }
+    #clr { width: 20px; height: 20px; border-radius: 3px; border: 1px solid #45475a; cursor: pointer; background: #fff; }
+    #crop-info { font-size: 10px; color: #a6e3a1; }
+
+    #result-panel { width: 180px; flex-shrink: 0; background: #181825; border-left: 1px solid #313244; display: flex; flex-direction: column; }
+    #rp-head { padding: 8px 12px; font-size: 11px; font-weight: 700; color: #6c7086; border-bottom: 1px solid #313244; }
+    #result-wrap { flex: 1; overflow-y: auto; padding: 8px; }
+    #res-img { width: 100%; display: none; border-radius: 4px; border: 1px solid #313244; margin-bottom: 6px; }
+    #res-info { font-size: 10px; color: #6c7086; line-height: 1.8; }
+    .si { display: flex; align-items: center; gap: 4px; padding: 3px 0; border-bottom: 1px solid #11111b; font-size: 10px; }
+    .si .sno { color: #cba6f7; font-weight: 600; flex: 1; }
+    .si .sok { color: #a6e3a1; }
+    #exp-area { padding: 8px; border-top: 1px solid #313244; }
+    #exp-btn { width: 100%; padding: 8px; background: #a6e3a1; color: #11111b; border: none; border-radius: 5px; font-size: 12px; font-weight: 700; cursor: pointer; }
+    #exp-btn:disabled { background: #313244; color: #6c7086; cursor: default; }
+    #exp-cnt { font-size: 10px; color: #6c7086; text-align: center; margin-top: 4px; }
+    #loading-overlay { position: fixed; inset: 0; background: rgba(17,17,27,.9); display: none; align-items: center; justify-content: center; z-index: 999; color: #cba6f7; font-size: 15px; }
+  </style>
+</head>
+<body>
+  <div id="loading-overlay"></div>
+  <div id="app">
+    <div id="sidebar">
+      <div id="sb-head"><h2>상품 목록</h2><div id="sb-stat"></div></div>
+      <div id="sb-search"><input id="s-inp" type="text" placeholder="검색..."></div>
+      <div id="prod-list"></div>
+    </div>
+
+    <div id="main">
+      <div id="topbar">
+        <button class="btn" id="btn-prev" onclick="go(-1)" disabled>Prev</button>
+        <div class="info">
+          <div id="top-no"></div>
+          <div id="top-nm"></div>
+        </div>
+        <button class="btn" id="btn-next" onclick="go(1)" disabled>Next</button>
+        <button class="btn ok" id="btn-save" onclick="save()" disabled>Save and next</button>
+        <button class="btn" id="btn-load-xlsx" disabled>Use upper uploader</button>
+        <select id="save-slot" class="btn" disabled>
+          <option value="both" selected>CL+CM</option>
+        </select>
+        <span id="save-slot-hint" style="font-size:11px;color:#a6e3a1;min-width:88px">Target: CL+CM</span>
+      </div>
+
+      <div id="workspace">
+        <div id="left-panel">
+          <div id="compare-box">
+            <div class="cmp-title">현재 CL/CM 참고 이미지</div>
+            <div class="cmp-row">
+              <div class="cmp-item">
+                <div class="cmp-label">CL</div>
+                <img id="cmp-cl" alt="" style="display:none">
+                <div id="cmp-cl-none" class="cmp-none">없음</div>
+              </div>
+              <div class="cmp-item">
+                <div class="cmp-label">CM</div>
+                <img id="cmp-cm" alt="" style="display:none">
+                <div id="cmp-cm-none" class="cmp-none">없음</div>
+              </div>
+            </div>
+          </div>
+
+          <div id="ptabs">
+            <div class="ptab on" id="tab-imgs" onclick="showTab('imgs')">이미지 목록</div>
+            <div class="ptab" id="tab-html" onclick="showTab('html')">HTML 입력</div>
+          </div>
+          <div id="html-tab">
+            <textarea id="html-input" placeholder="상세페이지 HTML을 붙여넣으세요..."></textarea>
+            <button id="parse-btn" onclick="parseHTML()">이미지 추출</button>
+          </div>
+          <div id="imgs-tab">
+            <div id="size-bar">
+              <label>크기</label>
+              <input type="range" id="sz" min="80" max="500" value="180">
+              <span id="sz-num">180px</span>
+            </div>
+            <div id="thumb-list"></div>
+          </div>
+        </div>
+
+        <div id="editor">
+          <div id="canvas-wrap">
+            <div id="no-msg">왼쪽 이미지 목록에서 편집할 이미지를 선택하세요</div>
+            <canvas id="cv"></canvas>
+          </div>
+          <div id="toolbar">
+            <div class="tg">
+              <span class="tl">도구</span>
+              <button class="tt on" id="t-crop" onclick="setTool('crop')">1:1 Crop</button>
+              <button class="tt" id="t-eraser-free" onclick="setTool('eraser-free')">Free erase</button>
+              <button class="tt" id="t-eraser-rect" onclick="setTool('eraser-rect')">Rect erase</button>
+              <button class="tt" id="t-picker" onclick="setTool('picker')">Color picker</button>
+            </div>
+            <div class="sep"></div>
+            <div class="tg">
+              <span class="tl">Brush</span>
+              <input type="range" id="bsz" min="5" max="100" value="20" style="width:70px;accent-color:#cba6f7">
+            </div>
+            <div class="sep"></div>
+            <div class="tg">
+              <span class="tl">Color</span>
+              <div id="clr" onclick="document.getElementById('clr-inp').click()"></div>
+              <input type="color" id="clr-inp" value="#ffffff" style="display:none" oninput="setClr(this.value)">
+            </div>
+            <div class="sep"></div>
+            <div class="tg">
+              <button class="tt" id="btn-apply" onclick="applyCrop()" disabled>Apply crop</button>
+              <button class="tt" id="btn-erase-apply" onclick="applyEraseRect()" disabled style="display:none">Apply erase</button>
+              <button class="tt" id="btn-undo" onclick="undo()">Undo</button>
+              <button class="tt" id="btn-flip-h" onclick="flipHorizontal()">Flip H</button>
+              <button class="tt" id="btn-reset" onclick="reset()">Reset</button>
+            </div>
+            <span id="crop-info"></span>
+            <div style="margin-left:auto;display:flex;align-items:center;gap:6px;flex-shrink:0">
+              <span class="tl">Zoom</span>
+              <button class="tt" onclick="zoomCv(-0.2)">-</button>
+              <input type="range" id="zoom-slider" min="10" max="500" value="100" style="width:80px;accent-color:#cba6f7" oninput="zoomBySlider(this.value)">
+              <span id="zoom-info" style="font-size:11px;color:#a6e3a1;min-width:36px;text-align:center">100%</span>
+              <button class="tt" onclick="zoomCv(0.2)">+</button>
+              <button class="tt" id="btn-fit" onclick="fitCv()">Fit</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="result-panel">
+          <div id="rp-head">결과</div>
+          <div id="result-wrap">
+            <img id="res-img" alt="">
+            <div id="res-info">편집 결과와 저장 상태가 여기 표시됩니다</div>
+            <div id="saved-list"></div>
+          </div>
+          <div id="exp-area">
+            <button id="exp-btn" onclick="exportXlsx()" disabled>엑셀 내보내기</button>
+            <div id="exp-cnt"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const Streamlit = window.Streamlit;
+    let initialized = false;
+    let products = [];
+    let saved = {};
+    let idx = 0;
+    let tool = 'crop';
+    let clr = '#ffffff';
+    let currentUrls = [];
+    let curUrl = '';
+    let curThumbIdx = -1;
+    let lastHandledRequestId = null;
+    let undos = [];
+    let snap = null;
+    let cs = null, ce = null, cr = null, drag = false;
+    let cropMoving = false, cropMoveOffsetX = 0, cropMoveOffsetY = 0;
+    let cropResizing = false, cropResizeAnchorX = 0, cropResizeAnchorY = 0;
+    let erRect = null, erRects = [];
+    let cvScale = 1;
+
+    const cv = document.getElementById('cv');
+    const ctx = cv.getContext('2d', { willReadFrequently: true });
+
+    function setLoading(message) {
+      const el = document.getElementById('loading-overlay');
+      el.textContent = message || 'Loading...';
+      el.style.display = 'flex';
+    }
+
+    function clearLoading() {
+      document.getElementById('loading-overlay').style.display = 'none';
+    }
+
+    function sendAction(payload) {
+      Streamlit.setComponentValue({
+        ...payload,
+        ui_state: collectUiState(),
+      });
+    }
+
+    function collectUiState() {
+      return {
+        selected_index: idx,
+        html_input: document.getElementById('html-input').value,
+        current_urls: currentUrls,
+        selected_image_url: curUrl,
+        selected_thumb_idx: curThumbIdx,
+      };
+    }
+
+    function renderList(filterText) {
+      const q = (filterText || '').toLowerCase();
+      const list = document.getElementById('prod-list');
+      list.innerHTML = '';
+      products.forEach((p, i) => {
+        if (q && !String(p.prod_no).includes(q) && !String(p.prod_name || '').toLowerCase().includes(q)) return;
+        const d = document.createElement('div');
+        d.className = 'pi' + (i === idx ? ' active' : '') + (saved[p.prod_no] ? ' done' : '');
+        d.innerHTML = `<div class="pno">#${p.prod_no}</div><div class="pname">${p.prod_name || ''}</div>`;
+        d.onclick = () => selectProduct(i);
+        list.appendChild(d);
+      });
+      document.getElementById('sb-stat').textContent = `Total ${products.length} / Saved ${Object.keys(saved).length}`;
+    }
+
+    function updateCompareImages(p) {
+      const slots = [
+        ['cmp-cl', 'cmp-cl-none', p.img_cl],
+        ['cmp-cm', 'cmp-cm-none', p.img_cm],
+      ];
+      slots.forEach(([imgId, noneId, url]) => {
+        const img = document.getElementById(imgId);
+        const none = document.getElementById(noneId);
+        if (url) {
+          img.src = url;
+          img.style.display = 'block';
+          none.style.display = 'none';
+        } else {
+          img.style.display = 'none';
+          none.style.display = 'block';
+        }
+      });
+    }
+
+    function showTab(name) {
+      document.getElementById('tab-imgs').classList.toggle('on', name === 'imgs');
+      document.getElementById('tab-html').classList.toggle('on', name === 'html');
+      document.getElementById('imgs-tab').style.display = name === 'imgs' ? 'flex' : 'none';
+      document.getElementById('html-tab').style.display = name === 'html' ? 'flex' : 'none';
+    }
+
+    function parseHTML() {
+      const html = document.getElementById('html-input').value;
+      const matches = [...html.matchAll(/src=["']([^"']+\.(?:jpg|jpeg|png|gif|webp))[^"']*["']/gi)];
+      currentUrls = [...new Set(matches.map((m) => m[1]).filter((u) => u.startsWith('http')))];
+      renderThumbs(currentUrls);
+      showTab('imgs');
+    }
+
+    function renderThumbs(urls) {
+      const list = document.getElementById('thumb-list');
+      const s = +document.getElementById('sz').value;
+      document.getElementById('left-panel').style.width = (s + 36) + 'px';
+      list.innerHTML = '';
+      if (!urls.length) {
+        list.innerHTML = '<div style="color:#45475a;font-size:11px;padding:12px;text-align:center">No images</div>';
+        return;
+      }
+      urls.forEach((url, i) => {
+        const wrap = document.createElement('div');
+        wrap.className = 'tw';
+        wrap.innerHTML = `<div class="tw-lbl">Image ${i + 1}</div>`;
+        const div = document.createElement('div');
+        div.className = 'th' + (i === curThumbIdx ? ' sel' : '');
+        div.id = 'th-' + i;
+        div.style.width = s + 'px';
+        const img = document.createElement('img');
+        img.src = url;
+        img.loading = 'lazy';
+        div.appendChild(img);
+        div.onclick = () => requestLoadImage(url, i);
+        wrap.appendChild(div);
+        list.appendChild(wrap);
+      });
+    }
+
+    function selectProduct(i) {
+      idx = i;
+      const p = products[i];
+      document.getElementById('top-no').textContent = `#${p.prod_no} (${i + 1}/${products.length})`;
+      document.getElementById('top-nm').textContent = p.prod_name || '';
+      document.getElementById('btn-prev').disabled = i === 0;
+      document.getElementById('btn-next').disabled = i === products.length - 1;
+      updateCompareImages(p);
+      currentUrls = Array.isArray(p.detail_imgs) ? p.detail_imgs : [];
+      renderThumbs(currentUrls);
+      renderList(document.getElementById('s-inp').value);
+      if (currentUrls.length) {
+        requestLoadImage(currentUrls[0], 0);
+      } else {
+        clearCanvas();
+      }
+    }
+
+    function requestLoadImage(url, thumbIdx) {
+      curUrl = url;
+      curThumbIdx = thumbIdx;
+      renderThumbs(currentUrls);
+      setLoading('이미지를 불러오는 중...');
+      sendAction({
+        action: 'fetch_image',
+        url,
+        thumb_idx: thumbIdx,
+      });
+    }
+
+    function loadCanvasFromDataUrl(dataUrl, sourceUrl, thumbIdx) {
+      const img = new Image();
+      img.onload = () => {
+        cv.width = img.width;
+        cv.height = img.height;
+        ctx.clearRect(0, 0, cv.width, cv.height);
+        ctx.drawImage(img, 0, 0);
+        curUrl = sourceUrl;
+        curThumbIdx = thumbIdx;
+        undos = [];
+        snap = null;
+        cs = null;
+        ce = null;
+        cr = null;
+        erRect = null;
+        erRects = [];
+        document.getElementById('btn-apply').disabled = true;
+        document.getElementById('btn-erase-apply').disabled = true;
+        document.getElementById('btn-erase-apply').style.display = 'none';
+        document.getElementById('crop-info').textContent = '';
+        cv.style.display = 'block';
+        document.getElementById('no-msg').style.display = 'none';
+        document.getElementById('btn-save').disabled = false;
+        renderThumbs(currentUrls);
+        fitCv();
+        clearLoading();
+      };
+      img.onerror = () => {
+        clearLoading();
+        alert('이미지를 불러오지 못했습니다.');
+      };
+      img.src = dataUrl;
+    }
+
+    function clearCanvas() {
+      cv.style.display = 'none';
+      document.getElementById('no-msg').style.display = 'block';
+      document.getElementById('btn-save').disabled = true;
+      document.getElementById('crop-info').textContent = '';
+      curUrl = '';
+      curThumbIdx = -1;
+      renderThumbs(currentUrls);
+    }
+
+    function fitCv() {
+      const wrap = document.getElementById('canvas-wrap');
+      const sc = Math.min((wrap.clientWidth - 20) / cv.width, (wrap.clientHeight - 20) / cv.height, 1);
+      cvScale = sc;
+      cv.style.width = Math.round(cv.width * sc) + 'px';
+      cv.style.height = Math.round(cv.height * sc) + 'px';
+      updateZoom();
+    }
+
+    function updateZoom() {
+      const pct = Math.round(cvScale * 100);
+      document.getElementById('zoom-info').textContent = pct + '%';
+      document.getElementById('zoom-slider').value = pct;
+    }
+
+    function zoomCv(delta) {
+      if (cv.style.display === 'none') return;
+      cvScale = Math.max(0.1, Math.min(5, cvScale + delta));
+      cv.style.width = Math.round(cv.width * cvScale) + 'px';
+      cv.style.height = Math.round(cv.height * cvScale) + 'px';
+      updateZoom();
+    }
+
+    function zoomBySlider(val) {
+      if (cv.style.display === 'none') return;
+      cvScale = val / 100;
+      cv.style.width = Math.round(cv.width * cvScale) + 'px';
+      cv.style.height = Math.round(cv.height * cvScale) + 'px';
+      updateZoom();
+    }
+
+    function pushUndo() {
+      undos.push(ctx.getImageData(0, 0, cv.width, cv.height));
+      if (undos.length > 20) undos.shift();
+    }
+
+    function undo() {
+      if (snap) {
+        ctx.putImageData(snap, 0, 0);
+        snap = null;
+        return;
+      }
+      if (!undos.length) return;
+      const keepScale = cvScale;
+      const data = undos.pop();
+      cv.width = data.width;
+      cv.height = data.height;
+      ctx.putImageData(data, 0, 0);
+      cv.style.display = 'block';
+      document.getElementById('no-msg').style.display = 'none';
+      cvScale = keepScale || 1;
+      cv.style.width = Math.round(cv.width * cvScale) + 'px';
+      cv.style.height = Math.round(cv.height * cvScale) + 'px';
+      updateZoom();
+    }
+
+    function reset() {
+      if (curUrl) requestLoadImage(curUrl, curThumbIdx);
+    }
+
+    function flipHorizontal() {
+      if (cv.style.display === 'none') return;
+      if (snap) {
+        ctx.putImageData(snap, 0, 0);
+        snap = null;
+      }
+      pushUndo();
+      const tmp = document.createElement('canvas');
+      tmp.width = cv.width;
+      tmp.height = cv.height;
+      const tctx = tmp.getContext('2d');
+      tctx.translate(cv.width, 0);
+      tctx.scale(-1, 1);
+      tctx.drawImage(cv, 0, 0);
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      ctx.drawImage(tmp, 0, 0);
+      document.getElementById('crop-info').textContent = 'flipped horizontally';
+    }
+
+    function setTool(nextTool) {
+      tool = nextTool;
+      ['crop', 'eraser-free', 'eraser-rect', 'picker'].forEach((id) => {
+        const el = document.getElementById('t-' + id);
+        if (el) el.classList.toggle('on', id === nextTool);
+      });
+      cv.style.cursor = nextTool === 'crop' ? 'crosshair' : nextTool === 'eraser-free' ? 'cell' : nextTool === 'eraser-rect' ? 'crosshair' : 'copy';
+      if (nextTool !== 'crop' && nextTool !== 'eraser-rect') {
+        if (snap) {
+          ctx.putImageData(snap, 0, 0);
+          snap = null;
+        }
+        cs = null;
+        ce = null;
+        cr = null;
+        document.getElementById('btn-apply').disabled = true;
+      }
+      if (nextTool !== 'eraser-rect') {
+        document.getElementById('btn-erase-apply').style.display = 'none';
+        document.getElementById('btn-erase-apply').disabled = true;
+      }
+      if (nextTool === 'eraser-rect') {
+        document.getElementById('btn-apply').disabled = true;
+        if (snap) {
+          ctx.putImageData(snap, 0, 0);
+          snap = null;
+        }
+        cs = null;
+        ce = null;
+        cr = null;
+        erRect = null;
+        document.getElementById('btn-erase-apply').style.display = 'inline-block';
+        document.getElementById('btn-erase-apply').disabled = erRects.length === 0;
+      }
+    }
+
+    function setClr(c) {
+      clr = c;
+      document.getElementById('clr').style.background = c;
+    }
+
+    function cPos(e) {
+      const r = cv.getBoundingClientRect();
+      return { x: (e.clientX - r.left) * (cv.width / r.width), y: (e.clientY - r.top) * (cv.height / r.height) };
+    }
+
+    function isInsideCropRect(p) {
+      return !!cr && p.x >= cr.x && p.x <= cr.x + cr.s && p.y >= cr.y && p.y <= cr.y + cr.s;
+    }
+
+    function isOnCropResizeHandle(p) {
+      if (!cr) return false;
+      const hx = cr.x + cr.s;
+      const hy = cr.y + cr.s;
+      const hs = Math.max(8, 10 / cvScale);
+      return Math.abs(p.x - hx) <= hs && Math.abs(p.y - hy) <= hs;
+    }
+
+    function drawCropOverlay() {
+      if (!snap || !cs || !ce) return;
+      ctx.putImageData(snap, 0, 0);
+      const x = Math.min(cs.x, ce.x);
+      const y = Math.min(cs.y, ce.y);
+      const sz = Math.abs(ce.x - cs.x);
+      ctx.fillStyle = 'rgba(0,0,0,0.5)';
+      ctx.fillRect(0, 0, cv.width, cv.height);
+      const tmp = document.createElement('canvas');
+      tmp.width = cv.width;
+      tmp.height = cv.height;
+      tmp.getContext('2d').putImageData(snap, 0, 0);
+      ctx.drawImage(tmp, x, y, sz, sz, x, y, sz, sz);
+      ctx.strokeStyle = '#cba6f7';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, y, sz, sz);
+    }
+
+    function drawEraseRectOverlay() {
+      if (!snap) return;
+      ctx.putImageData(snap, 0, 0);
+      const allRects = erRect ? [...erRects, erRect] : erRects;
+      if (!allRects.length) return;
+      ctx.strokeStyle = '#f38ba8';
+      ctx.lineWidth = Math.max(1, 2 / cvScale);
+      ctx.setLineDash([6 / cvScale, 3 / cvScale]);
+      allRects.forEach((r) => {
+        ctx.fillStyle = 'rgba(255,100,100,0.25)';
+        ctx.fillRect(r.x, r.y, r.w, r.h);
+        ctx.strokeRect(r.x, r.y, r.w, r.h);
+      });
+      ctx.setLineDash([]);
+    }
+
+    function applyCrop() {
+      if (!cr) return;
+      if (snap) {
+        ctx.putImageData(snap, 0, 0);
+        snap = null;
+      }
+      pushUndo();
+      const { x, y, s } = cr;
+      const tmp = document.createElement('canvas');
+      tmp.width = s;
+      tmp.height = s;
+      tmp.getContext('2d').drawImage(cv, x, y, s, s, 0, 0, s, s);
+      cv.width = s;
+      cv.height = s;
+      ctx.drawImage(tmp, 0, 0);
+      cr = null;
+      cs = null;
+      ce = null;
+      document.getElementById('btn-apply').disabled = true;
+      document.getElementById('crop-info').textContent = 'crop applied';
+      fitCv();
+    }
+
+    function applyEraseRect() {
+      if (erRects.length === 0 && !erRect) return;
+      if (snap) ctx.putImageData(snap, 0, 0);
+      pushUndo();
+      const allRects = erRect ? [...erRects, erRect] : erRects;
+      ctx.fillStyle = clr;
+      allRects.forEach((r) => ctx.fillRect(r.x, r.y, r.w, r.h));
+      erRect = null;
+      erRects = [];
+      cs = null;
+      ce = null;
+      snap = null;
+      document.getElementById('btn-erase-apply').disabled = true;
+      document.getElementById('btn-erase-apply').style.display = 'none';
+      document.getElementById('crop-info').textContent = 'erase applied';
+    }
+
+    function erase(p) {
+      const r = +document.getElementById('bsz').value / 2;
+      ctx.fillStyle = clr;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    async function save() {
+      if (cv.style.display === 'none') return;
+      if (snap) {
+        ctx.putImageData(snap, 0, 0);
+        snap = null;
+      }
+      const p = products[idx];
+      const exportCanvas = document.createElement('canvas');
+      exportCanvas.width = 800;
+      exportCanvas.height = 800;
+      const exportCtx = exportCanvas.getContext('2d');
+      exportCtx.imageSmoothingEnabled = true;
+      exportCtx.imageSmoothingQuality = 'high';
+      exportCtx.drawImage(cv, 0, 0, exportCanvas.width, exportCanvas.height);
+      const dataUrl = exportCanvas.toDataURL('image/jpeg', 0.92);
+      setLoading('Drive에 저장 중...');
+      document.getElementById('btn-save').disabled = true;
+      sendAction({
+        action: 'save_image',
+        prod_no: p.prod_no,
+        filename: `${p.prod_no}_main.jpg`,
+        data_url: dataUrl,
+        preview_data_url: dataUrl,
+      });
+    }
+
+    function exportXlsx() {
+      if (!Object.keys(saved).length) {
+        alert('저장된 항목이 없습니다.');
+        return;
+      }
+      setLoading('엑셀을 생성하는 중...');
+      sendAction({ action: 'export_xlsx' });
+    }
+
+    function go(dir) {
+      const next = idx + dir;
+      if (next >= 0 && next < products.length) selectProduct(next);
+    }
+
+    function handleSaveResult(res) {
+      saved = res.saved_data || saved;
+      document.getElementById('res-img').src = res.preview_data_url || '';
+      document.getElementById('res-img').style.display = res.preview_data_url ? 'block' : 'none';
+      document.getElementById('res-info').innerHTML =
+        `<b>${res.filename || ''}</b> saved<br><span style="color:#89b4fa;font-size:10px;word-break:break-all">CL: ${res.cl_url || '-'}<br>CM: ${res.cm_url || '-'}</span>`;
+      document.getElementById('exp-btn').disabled = false;
+      document.getElementById('exp-cnt').textContent = `${Object.keys(saved).length} item(s) saved`;
+      renderSavedList();
+      renderList(document.getElementById('s-inp').value);
+      if (typeof res.next_index === 'number' && res.next_index < products.length) {
+        idx = res.next_index;
+        selectProduct(idx);
+      } else {
+        document.getElementById('btn-save').disabled = false;
+      }
+      clearLoading();
+    }
+
+    function renderSavedList() {
+      const wrap = document.getElementById('saved-list');
+      wrap.innerHTML = '';
+      Object.entries(saved).forEach(([prodNo, d]) => {
+        const row = document.createElement('div');
+        row.className = 'si';
+        const state = (d.cl_url ? 'CL' : '-') + '/' + (d.cm_url ? 'CM' : '-');
+        row.innerHTML = `<span class="sno">${prodNo}</span><span class="sok">${state}</span>`;
+        wrap.appendChild(row);
+      });
+    }
+
+    function handleActionResult(res) {
+      if (!res || !res.request_id || res.request_id === lastHandledRequestId) return;
+      lastHandledRequestId = res.request_id;
+
+      if (!res.ok) {
+        clearLoading();
+        document.getElementById('btn-save').disabled = false;
+        alert(res.error || '작업 중 오류가 발생했습니다.');
+        return;
+      }
+
+      if (res.action === 'fetch_image') {
+        loadCanvasFromDataUrl(res.data_url, res.url, res.thumb_idx ?? 0);
+      } else if (res.action === 'save_image') {
+        handleSaveResult(res);
+      } else if (res.action === 'export_xlsx') {
+        clearLoading();
+        const bytes = atob(res.file_b64);
+        const buf = new Uint8Array(bytes.length);
+        for (let i = 0; i < bytes.length; i++) buf[i] = bytes.charCodeAt(i);
+        const blob = new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = res.filename || 'shopling_edited.xlsx';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 3000);
+      }
+    }
+
+    function applyRender(args) {
+      products = Array.isArray(args.products) ? args.products : [];
+      saved = args.saved_data || {};
+      renderSavedList();
+      document.getElementById('exp-btn').disabled = Object.keys(saved).length === 0;
+      document.getElementById('exp-cnt').textContent = Object.keys(saved).length ? `${Object.keys(saved).length} item(s) saved` : '';
+
+      const ui = args.ui_state || {};
+      if (ui.html_input !== undefined) document.getElementById('html-input').value = ui.html_input;
+
+      if (!products.length) {
+        renderList('');
+        clearCanvas();
+      } else {
+        const nextIndex = Math.min(Math.max(ui.selected_index ?? idx ?? 0, 0), products.length - 1);
+        if (products[nextIndex]) {
+          idx = nextIndex;
+          const p = products[idx];
+          document.getElementById('top-no').textContent = `#${p.prod_no} (${idx + 1}/${products.length})`;
+          document.getElementById('top-nm').textContent = p.prod_name || '';
+          document.getElementById('btn-prev').disabled = idx === 0;
+          document.getElementById('btn-next').disabled = idx === products.length - 1;
+          updateCompareImages(p);
+          currentUrls = Array.isArray(ui.current_urls) && ui.current_urls.length ? ui.current_urls : (p.detail_imgs || []);
+          renderThumbs(currentUrls);
+          renderList(document.getElementById('s-inp').value);
+          if (!curUrl && currentUrls.length) {
+            requestLoadImage(currentUrls[0], 0);
+          }
+        }
+      }
+
+      handleActionResult(args.action_result);
+      Streamlit.setFrameHeight(document.documentElement.scrollHeight);
+    }
+
+    function init() {
+      if (initialized) return;
+      initialized = true;
+      setClr('#ffffff');
+      document.getElementById('s-inp').addEventListener('input', (e) => renderList(e.target.value));
+      document.getElementById('sz').addEventListener('input', function () {
+        document.getElementById('sz-num').textContent = this.value + 'px';
+        renderThumbs(currentUrls);
+      });
+      window.addEventListener('resize', () => {
+        if (cv.style.display !== 'none') fitCv();
+        Streamlit.setFrameHeight(document.documentElement.scrollHeight);
+      });
+
+      cv.addEventListener('mousedown', (e) => {
+        if (!curUrl) return;
+        const p = cPos(e);
+        if (tool === 'crop') {
+          if (cr && isOnCropResizeHandle(p)) {
+            if (!snap) snap = ctx.getImageData(0, 0, cv.width, cv.height);
+            cropResizing = true;
+            cropResizeAnchorX = cr.x;
+            cropResizeAnchorY = cr.y;
+          } else if (cr && isInsideCropRect(p)) {
+            if (!snap) snap = ctx.getImageData(0, 0, cv.width, cv.height);
+            cropMoving = true;
+            cropMoveOffsetX = p.x - cr.x;
+            cropMoveOffsetY = p.y - cr.y;
+          } else {
+            snap = ctx.getImageData(0, 0, cv.width, cv.height);
+            cs = p;
+            ce = null;
+            drag = true;
+            cr = null;
+            document.getElementById('btn-apply').disabled = true;
+          }
+        } else if (tool === 'eraser-free') {
+          pushUndo();
+          erase(p);
+          drag = true;
+        } else if (tool === 'eraser-rect') {
+          if (!snap) snap = ctx.getImageData(0, 0, cv.width, cv.height);
+          cs = p;
+          ce = null;
+          drag = true;
+          erRect = null;
+          document.getElementById('btn-erase-apply').style.display = 'inline-block';
+          document.getElementById('btn-erase-apply').disabled = false;
+        } else if (tool === 'picker') {
+          const px = ctx.getImageData(Math.max(0, Math.round(p.x)), Math.max(0, Math.round(p.y)), 1, 1).data;
+          const hex = '#' + [px[0], px[1], px[2]].map((v) => v.toString(16).padStart(2, '0')).join('');
+          setClr(hex);
+          document.getElementById('clr-inp').value = hex;
+          setTool('eraser-free');
+        }
+      });
+
+      window.addEventListener('mousemove', (e) => {
+        if (!drag && !cropMoving && !cropResizing) return;
+        const p = cPos(e);
+        if (cropMoving) {
+          cr = { x: Math.max(0, Math.min(p.x - cropMoveOffsetX, cv.width - cr.s)), y: Math.max(0, Math.min(p.y - cropMoveOffsetY, cv.height - cr.s)), s: cr.s };
+          cs = { x: cr.x, y: cr.y };
+          ce = { x: cr.x + cr.s, y: cr.y + cr.s };
+          drawCropOverlay();
+          return;
+        }
+        if (cropResizing) {
+          const maxS = Math.min(cv.width - cropResizeAnchorX, cv.height - cropResizeAnchorY);
+          const rawS = Math.max(p.x - cropResizeAnchorX, p.y - cropResizeAnchorY);
+          const nextS = Math.max(6, Math.min(rawS, maxS));
+          cr = { x: cropResizeAnchorX, y: cropResizeAnchorY, s: nextS };
+          cs = { x: cr.x, y: cr.y };
+          ce = { x: cr.x + cr.s, y: cr.y + cr.s };
+          drawCropOverlay();
+          return;
+        }
+        if (tool === 'crop') {
+          const dx = p.x - cs.x;
+          const dy = p.y - cs.y;
+          const sz = Math.min(Math.abs(dx), Math.abs(dy));
+          ce = { x: cs.x + sz * Math.sign(dx), y: cs.y + sz * Math.sign(dy) };
+          drawCropOverlay();
+        } else if (tool === 'eraser-free') {
+          erase(p);
+        } else if (tool === 'eraser-rect') {
+          ce = p;
+          erRect = { x: Math.min(cs.x, ce.x), y: Math.min(cs.y, ce.y), w: Math.abs(ce.x - cs.x), h: Math.abs(ce.y - cs.y) };
+          drawEraseRectOverlay();
+        }
+      });
+
+      window.addEventListener('mouseup', () => {
+        if (cropMoving) {
+          cropMoving = false;
+          document.getElementById('btn-apply').disabled = false;
+          return;
+        }
+        if (cropResizing) {
+          cropResizing = false;
+          document.getElementById('btn-apply').disabled = false;
+          return;
+        }
+        if (!drag) return;
+        drag = false;
+        if (tool === 'crop' && cs && ce) {
+          const sz = Math.abs(ce.x - cs.x);
+          if (sz > 5) {
+            cr = { x: Math.min(cs.x, ce.x), y: Math.min(cs.y, ce.y), s: sz };
+            document.getElementById('btn-apply').disabled = false;
+            document.getElementById('crop-info').textContent = `${Math.round(sz)}x${Math.round(sz)}px`;
+          }
+        } else if (tool === 'eraser-rect' && cs && ce) {
+          const w = Math.abs(ce.x - cs.x);
+          const h = Math.abs(ce.y - cs.y);
+          if (w > 3 && h > 3) {
+            erRects.push({ x: Math.min(cs.x, ce.x), y: Math.min(cs.y, ce.y), w, h });
+            erRect = null;
+            drawEraseRectOverlay();
+            document.getElementById('btn-erase-apply').disabled = false;
+            document.getElementById('crop-info').textContent = `${erRects.length} area(s) selected`;
+          }
+        }
+      });
+    }
+
+    function onRender(event) {
+      init();
+      const args = event.detail.args || {};
+      applyRender(args);
+    }
+
+    Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
+    Streamlit.setComponentReady();
+    Streamlit.setFrameHeight(900);
+  </script>
+</body>
+</html>
