@@ -24,9 +24,6 @@
 
     #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
     #topbar { background: #11111b; padding: 8px 14px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #313244; flex-shrink: 0; }
-    #app-tabs { display: flex; gap: 6px; margin-right: 4px; }
-    .app-tab-btn { padding: 5px 10px; border-radius: 5px; border: 1px solid #45475a; background: #181825; color: #cdd6f4; font-size: 11px; cursor: pointer; white-space: nowrap; }
-    .app-tab-btn.on { background: #f38ba8; color: #11111b; border-color: #f38ba8; font-weight: 700; }
     #topbar .info { flex: 1; min-width: 0; }
     #top-no { font-size: 10px; color: #6c7086; }
     #top-nm { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -104,11 +101,6 @@
 
     <div id="main">
       <div id="topbar">
-        <div id="app-tabs">
-          <button class="app-tab-btn" id="nav-optimizer" onclick="navigateTab('optimizer')">상품명 최적화</button>
-          <button class="app-tab-btn" id="nav-sourcing" onclick="navigateTab('sourcing')">상품 소싱</button>
-          <button class="app-tab-btn on" id="nav-image_editor" onclick="navigateTab('image_editor')">이미지 수정</button>
-        </div>
         <button class="btn" id="btn-prev" onclick="go(-1)" disabled>Prev</button>
         <div class="info">
           <div id="top-no"></div>
@@ -269,10 +261,6 @@
       });
     }
 
-    function navigateTab(tabName) {
-      sendAction({ action: 'navigate_tab', target_tab: tabName });
-    }
-
     function collectUiState() {
       return {
         selected_index: idx,
@@ -280,6 +268,7 @@
         current_urls: currentUrls,
         selected_image_url: curUrl,
         selected_thumb_idx: curThumbIdx,
+        thumb_size: Number(document.getElementById('sz').value || 180),
       };
     }
 
@@ -367,7 +356,10 @@
       document.getElementById('btn-prev').disabled = i === 0;
       document.getElementById('btn-next').disabled = i === products.length - 1;
       updateCompareImages(p);
-      currentUrls = Array.isArray(p.detail_imgs) ? p.detail_imgs : [];
+      const fallbackUrls = [];
+      if (p.img_cl) fallbackUrls.push(p.img_cl);
+      if (p.img_cm && p.img_cm !== p.img_cl) fallbackUrls.push(p.img_cm);
+      currentUrls = Array.isArray(p.detail_imgs) && p.detail_imgs.length ? p.detail_imgs : fallbackUrls;
       renderThumbs(currentUrls);
       renderList(document.getElementById('s-inp').value);
       if (currentUrls.length) {
@@ -756,10 +748,6 @@
     }
 
     function applyRender(args) {
-      ['optimizer', 'sourcing', 'image_editor'].forEach((name) => {
-        const el = document.getElementById('nav-' + name);
-        if (el) el.classList.toggle('on', name === 'image_editor');
-      });
       products = Array.isArray(args.products) ? args.products : [];
       saved = args.saved_data || {};
       renderSavedList();
@@ -768,6 +756,10 @@
 
       const ui = args.ui_state || {};
       if (ui.html_input !== undefined) document.getElementById('html-input').value = ui.html_input;
+      if (ui.thumb_size !== undefined) {
+        document.getElementById('sz').value = String(ui.thumb_size);
+        document.getElementById('sz-num').textContent = `${ui.thumb_size}px`;
+      }
 
       if (!products.length) {
         renderList('');
@@ -782,7 +774,12 @@
           document.getElementById('btn-prev').disabled = idx === 0;
           document.getElementById('btn-next').disabled = idx === products.length - 1;
           updateCompareImages(p);
-          currentUrls = Array.isArray(ui.current_urls) && ui.current_urls.length ? ui.current_urls : (p.detail_imgs || []);
+          const fallbackUrls = [];
+          if (p.img_cl) fallbackUrls.push(p.img_cl);
+          if (p.img_cm && p.img_cm !== p.img_cl) fallbackUrls.push(p.img_cm);
+          currentUrls = Array.isArray(ui.current_urls) && ui.current_urls.length
+            ? ui.current_urls
+            : ((Array.isArray(p.detail_imgs) && p.detail_imgs.length) ? p.detail_imgs : fallbackUrls);
           renderThumbs(currentUrls);
           renderList(document.getElementById('s-inp').value);
           if (!curUrl && currentUrls.length) {

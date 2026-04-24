@@ -739,13 +739,7 @@ if selected_tab == "image_editor":
                     action = component_action.get("action")
 
                     try:
-                        if action == "navigate_tab":
-                            target_tab = component_action.get("target_tab")
-                            if target_tab in tab_options:
-                                st.session_state.active_tab = target_tab
-                            st.session_state.image_editor_action_result = None
-                            st.rerun()
-                        elif action == "fetch_image":
+                        if action == "fetch_image":
                             data_url = fetch_image_as_b64(component_action["url"])
                             st.session_state.image_editor_action_result = _build_image_action_result(
                                 "fetch_image",
