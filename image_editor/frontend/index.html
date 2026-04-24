@@ -62,7 +62,7 @@
     .th img { display: block; width: 100%; height: auto; }
 
     #editor { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: #1e1e2e; }
-    #canvas-wrap { flex: 1; min-height: 620px; overflow: auto; padding: 10px; }
+    #canvas-wrap { flex: 1; min-height: 650px; overflow: auto; padding: 10px; }
     #cv { display: none; cursor: crosshair; }
     #no-msg { color: #45475a; font-size: 13px; text-align: center; padding: 20px; line-height: 3; }
     #toolbar { background: #181825; border-top: 1px solid #313244; padding: 8px 10px; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
@@ -241,6 +241,8 @@
     let cropResizing = false, cropResizeAnchorX = 0, cropResizeAnchorY = 0;
     let erRect = null, erRects = [];
     let cvScale = 1;
+    let compareClDataUrl = '';
+    let compareCmDataUrl = '';
 
     const cv = document.getElementById('cv');
     const ctx = cv.getContext('2d', { willReadFrequently: true });
@@ -264,7 +266,7 @@
     }
 
     function refreshFrameHeight() {
-      const nextHeight = Math.max(document.documentElement.scrollHeight, window.innerHeight - 110, 920);
+      const nextHeight = Math.max(780, window.innerHeight - 18);
       Streamlit.setFrameHeight(nextHeight);
     }
 
@@ -296,8 +298,8 @@
 
     function updateCompareImages(p) {
       const slots = [
-        ['cmp-cl', 'cmp-cl-none', p.img_cl],
-        ['cmp-cm', 'cmp-cm-none', p.img_cm],
+        ['cmp-cl', 'cmp-cl-none', compareClDataUrl || p.img_cl],
+        ['cmp-cm', 'cmp-cm-none', compareCmDataUrl || p.img_cm],
       ];
       slots.forEach(([imgId, noneId, url]) => {
         const img = document.getElementById(imgId);
@@ -357,6 +359,8 @@
 
     function selectProduct(i) {
       idx = i;
+      compareClDataUrl = '';
+      compareCmDataUrl = '';
       const p = products[i];
       document.getElementById('top-no').textContent = `#${p.prod_no} (${i + 1}/${products.length})`;
       document.getElementById('top-nm').textContent = p.prod_name || '';
@@ -383,6 +387,7 @@
       setLoading('이미지를 불러오는 중...');
       sendAction({
         action: 'fetch_image',
+        prod_no: products[idx] ? products[idx].prod_no : '',
         url,
         thumb_idx: thumbIdx,
       });
@@ -747,6 +752,11 @@
       }
 
       if (res.action === 'fetch_image') {
+        if (String(res.prod_no || '') === String(products[idx]?.prod_no || '')) {
+          compareClDataUrl = res.compare_cl_data_url || '';
+          compareCmDataUrl = res.compare_cm_data_url || '';
+          if (products[idx]) updateCompareImages(products[idx]);
+        }
         loadCanvasFromDataUrl(res.data_url, res.url, res.thumb_idx ?? 0);
       } else if (res.action === 'save_image') {
         handleSaveResult(res);

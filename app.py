@@ -157,6 +157,15 @@ def _build_image_action_result(action: str, ok: bool = True, **extra) -> dict:
     }
 
 
+def _safe_fetch_image_data(url: str) -> str | None:
+    if not url:
+        return None
+    try:
+        return fetch_image_as_b64(url)
+    except Exception:
+        return None
+
+
 def _save_editor_image(prod_no: str, filename: str, data_url: str, saved_data: dict) -> dict:
     prev = saved_data.get(prod_no, {})
 
@@ -693,14 +702,39 @@ if selected_tab == "sourcing":
 # TAB 3: 이미지 수정
 # ════════════════════════════════════════════════════════════════════
 if selected_tab == "image_editor":
-    st.subheader("상품 이미지 수정")
-
-    uploaded_image_file = st.file_uploader(
-        "이미지 수정용 엑셀 업로드 (.xlsx)",
-        type=["xlsx"],
-        key="image_editor_file",
-        help="A열 상품번호 기준으로 90열(CL), 91열(CM) 이미지 URL을 갱신합니다.",
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stFileUploader"] > label,
+        div[data-testid="stFileUploaderDropzoneInstructions"],
+        div[data-testid="stFileUploaderDropzone"] small {
+            font-size: 0.92rem !important;
+        }
+        div[data-testid="stFileUploaderDropzone"] {
+            padding-top: 0.55rem !important;
+            padding-bottom: 0.55rem !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
     )
+
+    uploader_col, status_col = st.columns([1.35, 1])
+    with uploader_col:
+        uploaded_image_file = st.file_uploader(
+            "이미지 수정용 엑셀 업로드 (.xlsx)",
+            type=["xlsx"],
+            key="image_editor_file",
+            help="A열 상품번호 기준으로 90열(CL), 91열(CM) 이미지 URL을 갱신합니다.",
+        )
+    with status_col:
+        if st.session_state.image_editor_saved_data:
+            st.caption(f"현재 반영 대기 상품 수: {len(st.session_state.image_editor_saved_data)}개")
+            if st.button("이미지 수정 작업 초기화", use_container_width=True):
+                st.session_state.image_editor_saved_data = {}
+                st.session_state.image_editor_action_result = None
+                st.session_state.image_editor_ui_state = {}
+                st.rerun()
 
     if uploaded_image_file:
         image_xlsx_bytes = uploaded_image_file.read()
@@ -720,7 +754,7 @@ if selected_tab == "image_editor":
                 )
             ]
 
-            st.info(
+            st.caption(
                 f"총 {len(products)}개 상품을 읽었습니다. "
                 f"이미지 정보가 있는 상품은 {len(editable_products)}개입니다."
             )
@@ -743,13 +777,18 @@ if selected_tab == "image_editor":
 
                         try:
                             if action == "fetch_image":
+                                prod_no = str(component_action.get("prod_no", ""))
+                                product = next((item for item in editable_products if str(item.get("prod_no")) == prod_no), None)
                                 data_url = fetch_image_as_b64(component_action["url"])
                                 st.session_state.image_editor_action_result = _build_image_action_result(
                                     "fetch_image",
                                     request_id=request_id,
+                                    prod_no=prod_no,
                                     url=component_action.get("url"),
                                     thumb_idx=component_action.get("thumb_idx", 0),
                                     data_url=data_url,
+                                    compare_cl_data_url=_safe_fetch_image_data((product or {}).get("img_cl", "")),
+                                    compare_cm_data_url=_safe_fetch_image_data((product or {}).get("img_cm", "")),
                                 )
                             elif action == "save_image":
                                 prod_no = str(component_action["prod_no"])
@@ -800,13 +839,6 @@ if selected_tab == "image_editor":
                             )
                             st.rerun()
 
-                if st.session_state.image_editor_saved_data:
-                    st.caption(f"현재 반영 대기 상품 수: {len(st.session_state.image_editor_saved_data)}개")
-                    if st.button("이미지 수정 작업 초기화", use_container_width=True):
-                        st.session_state.image_editor_saved_data = {}
-                        st.session_state.image_editor_action_result = None
-                        st.session_state.image_editor_ui_state = {}
-                        st.rerun()
             else:
                 st.warning("엑셀에서 이미지 정보가 있는 상품을 찾지 못했습니다.")
         else:
