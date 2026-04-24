@@ -7,7 +7,7 @@
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: "Malgun Gothic", sans-serif; background: #1e1e2e; color: #cdd6f4; height: 100vh; overflow: hidden; }
-    #app { display: flex; height: 100vh; }
+    #app { display: flex; height: 100vh; min-height: 100vh; }
     #sidebar { width: 220px; flex-shrink: 0; background: #181825; border-right: 1px solid #313244; display: flex; flex-direction: column; }
     #sb-head { padding: 12px; background: #11111b; border-bottom: 1px solid #313244; }
     #sb-head h2 { font-size: 13px; color: #cba6f7; margin-bottom: 2px; }
@@ -32,7 +32,7 @@
     .btn:disabled { opacity: .35; cursor: default; }
     .btn.ok { background: #cba6f7; color: #11111b; border-color: #cba6f7; font-weight: 700; }
 
-    #workspace { flex: 1; display: flex; overflow: hidden; }
+    #workspace { flex: 1; display: flex; overflow: hidden; min-height: calc(100vh - 54px); }
     #left-panel { width: 220px; flex-shrink: 0; background: #181825; border-right: 1px solid #313244; display: flex; flex-direction: column; overflow: hidden; }
     #compare-box { padding: 8px; border-bottom: 1px solid #313244; flex-shrink: 0; }
     .cmp-title { font-size: 10px; color: #6c7086; font-weight: 600; margin-bottom: 6px; }
@@ -61,8 +61,8 @@
     .th.sel { border-color: #cba6f7; }
     .th img { display: block; width: 100%; height: auto; }
 
-    #editor { flex: 1; min-width: 0; display: flex; flex-direction: column; background: #1e1e2e; }
-    #canvas-wrap { flex: 1; overflow: auto; padding: 10px; }
+    #editor { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: #1e1e2e; }
+    #canvas-wrap { flex: 1; min-height: 620px; overflow: auto; padding: 10px; }
     #cv { display: none; cursor: crosshair; }
     #no-msg { color: #45475a; font-size: 13px; text-align: center; padding: 20px; line-height: 3; }
     #toolbar { background: #181825; border-top: 1px solid #313244; padding: 8px 10px; display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
@@ -263,6 +263,11 @@
       });
     }
 
+    function refreshFrameHeight() {
+      const nextHeight = Math.max(document.documentElement.scrollHeight, window.innerHeight - 110, 920);
+      Streamlit.setFrameHeight(nextHeight);
+    }
+
     function collectUiState() {
       return {
         selected_index: idx,
@@ -434,6 +439,7 @@
       cv.style.width = Math.round(cv.width * sc) + 'px';
       cv.style.height = Math.round(cv.height * sc) + 'px';
       updateZoom();
+      refreshFrameHeight();
     }
 
     function updateZoom() {
@@ -570,6 +576,7 @@
       const x = Math.min(cs.x, ce.x);
       const y = Math.min(cs.y, ce.y);
       const sz = Math.abs(ce.x - cs.x);
+      const handleSize = Math.max(10, 14 / cvScale);
       ctx.fillStyle = 'rgba(0,0,0,0.5)';
       ctx.fillRect(0, 0, cv.width, cv.height);
       const tmp = document.createElement('canvas');
@@ -580,6 +587,11 @@
       ctx.strokeStyle = '#cba6f7';
       ctx.lineWidth = 2;
       ctx.strokeRect(x, y, sz, sz);
+      ctx.fillStyle = '#cba6f7';
+      ctx.fillRect(x + sz - handleSize / 2, y + sz - handleSize / 2, handleSize, handleSize);
+      ctx.strokeStyle = '#11111b';
+      ctx.lineWidth = Math.max(1, 1.5 / cvScale);
+      ctx.strokeRect(x + sz - handleSize / 2, y + sz - handleSize / 2, handleSize, handleSize);
     }
 
     function drawEraseRectOverlay() {
@@ -619,6 +631,12 @@
       document.getElementById('btn-apply').disabled = true;
       document.getElementById('crop-info').textContent = 'crop applied';
       fitCv();
+    }
+
+    async function applyCropAndSave() {
+      if (!cr) return;
+      applyCrop();
+      await save();
     }
 
     function applyEraseRect() {
@@ -794,7 +812,7 @@
           }
         }
       }
-      Streamlit.setFrameHeight(document.documentElement.scrollHeight);
+      refreshFrameHeight();
     }
 
     function init() {
@@ -808,7 +826,7 @@
       });
       window.addEventListener('resize', () => {
         if (cv.style.display !== 'none') fitCv();
-        Streamlit.setFrameHeight(document.documentElement.scrollHeight);
+        refreshFrameHeight();
       });
 
       cv.addEventListener('mousedown', (e) => {
@@ -854,7 +872,26 @@
         }
       });
 
+      cv.addEventListener('dblclick', async (e) => {
+        if (!curUrl || tool !== 'crop' || !cr) return;
+        const p = cPos(e);
+        if (!isInsideCropRect(p)) return;
+        e.preventDefault();
+        await applyCropAndSave();
+      });
+
       window.addEventListener('mousemove', (e) => {
+        if (tool === 'crop' && curUrl && cv.style.display !== 'none' && !drag && !cropMoving && !cropResizing) {
+          const p = cPos(e);
+          if (cr && isOnCropResizeHandle(p)) {
+            cv.style.cursor = 'nwse-resize';
+          } else if (cr && isInsideCropRect(p)) {
+            cv.style.cursor = 'move';
+          } else {
+            cv.style.cursor = 'crosshair';
+          }
+          return;
+        }
         if (!drag && !cropMoving && !cropResizing) return;
         const p = cPos(e);
         if (cropMoving) {
@@ -893,11 +930,13 @@
         if (cropMoving) {
           cropMoving = false;
           document.getElementById('btn-apply').disabled = false;
+          document.getElementById('crop-info').textContent = `${Math.round(cr.s)}x${Math.round(cr.s)}px - drag inside to move, drag corner to resize`;
           return;
         }
         if (cropResizing) {
           cropResizing = false;
           document.getElementById('btn-apply').disabled = false;
+          document.getElementById('crop-info').textContent = `${Math.round(cr.s)}x${Math.round(cr.s)}px - drag inside to move, drag corner to resize`;
           return;
         }
         if (!drag) return;
@@ -907,7 +946,7 @@
           if (sz > 5) {
             cr = { x: Math.min(cs.x, ce.x), y: Math.min(cs.y, ce.y), s: sz };
             document.getElementById('btn-apply').disabled = false;
-            document.getElementById('crop-info').textContent = `${Math.round(sz)}x${Math.round(sz)}px`;
+            document.getElementById('crop-info').textContent = `${Math.round(sz)}x${Math.round(sz)}px - drag inside to move, drag corner to resize`;
           }
         } else if (tool === 'eraser-rect' && cs && ce) {
           const w = Math.abs(ce.x - cs.x);
@@ -932,7 +971,7 @@
 
     window.addEventListener("message", onRender);
     Streamlit.setComponentReady();
-    Streamlit.setFrameHeight(900);
+    refreshFrameHeight();
   </script>
 </body>
 </html>
