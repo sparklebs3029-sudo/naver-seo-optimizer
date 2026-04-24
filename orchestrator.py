@@ -20,6 +20,7 @@ from naver_seo_agent import (
     optimize_name, clean_by_rules, verify_name, enforce_min_length,
     fallback_by_shopping_search, strip_product_code,
     build_word_pool, filter_to_pool,
+    _gemini_call,
 )
 
 ATTRIBUTE_WORDS = [
@@ -205,7 +206,7 @@ def validate_result(
                 f"원본: {original}\n"
                 f"최적화: {final_name}"
             )
-            answer = model.generate_content(prompt).text.strip().upper()
+            answer = _gemini_call(model, prompt).text.strip().upper()
             if answer.startswith("NO"):
                 failures.append("상품 유형 변경됨: 원본과 다른 종류의 상품으로 최적화됨")
         except Exception:

@@ -24,7 +24,7 @@ from naver_seo_agent import (
 )
 from orchestrator import run_with_orchestration, OrchestratorReport
 
-APP_VERSION = "v1.7.2"  # Gemini 429 처리: detect_category 폴백 + 대기 시간 증가
+APP_VERSION = "v1.7.3"  # Gemini Rate Limiter: 모든 API 호출에 4.5초 간격 강제 적용
 
 st.set_page_config(
     page_title="셀러부스트",

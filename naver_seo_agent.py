@@ -8,10 +8,25 @@ import re
 import json
 import time
 import argparse
+import threading
 from datetime import datetime, timedelta
 import requests
 import google.generativeai as genai
 import openpyxl
+
+# ── Gemini Rate Limiter (무료 티어 15 RPM 대응) ──────────────────────
+_GEMINI_MIN_INTERVAL = 4.5          # 초 (15 RPM = 4s 최소, 버퍼 0.5s)
+_gemini_last_call    = [0.0]
+_gemini_lock         = threading.Lock()
+
+def _gemini_call(model, prompt: str):
+    """Gemini API 호출 간 최소 4.5초 간격을 보장하는 래퍼."""
+    with _gemini_lock:
+        elapsed = time.time() - _gemini_last_call[0]
+        if elapsed < _GEMINI_MIN_INTERVAL:
+            time.sleep(_GEMINI_MIN_INTERVAL - elapsed)
+        _gemini_last_call[0] = time.time()
+    return model.generate_content(prompt)
 
 
 # ── 네이버 쇼핑 카테고리 ────────────────────────────────────────────
@@ -225,7 +240,7 @@ def generate_keyword_candidates(
         f"상품명: {original}"
     )
     try:
-        response = model.generate_content(prompt)
+        response = _gemini_call(model, prompt)
         raw = response.text.strip()
         if raw.startswith("```"):
             lines = raw.splitlines()
@@ -252,7 +267,7 @@ def detect_category(original: str, model: genai.GenerativeModel) -> str:
         f"상품명: {original}"
     )
     try:
-        response = model.generate_content(prompt)
+        response = _gemini_call(model, prompt)
         category_name = response.text.strip()
         for name in NAVER_CATEGORIES:
             if name in category_name:
@@ -364,7 +379,7 @@ def classify_keywords(
         '다음 JSON 형식으로만 답변: {"core": ["핵심1", "핵심2", "핵심3"], "aux": ["보조1", "보조2", "보조3"]}'
     )
     try:
-        response = model.generate_content(prompt)
+        response = _gemini_call(model, prompt)
         raw = response.text.strip()
         if raw.startswith("```"):
             lines = raw.splitlines()
@@ -436,7 +451,7 @@ def optimize_name(
         f"초안(참고용): {guide_name}"
     )
     try:
-        response = model.generate_content(prompt)
+        response = _gemini_call(model, prompt)
         return response.text.strip()
     except Exception:
         return guide_name  # AI 호출 실패 시 알고리즘 결과 반환
@@ -483,7 +498,7 @@ def enforce_min_length(name: str, original: str, top_keywords: list[str], model:
         "특수문자, 배송 문구, 홍보 수식어는 사용하지 마세요.\n"
         "순수 텍스트 상품명만 답변하세요."
     )
-    result = clean_by_rules(model.generate_content(prompt).text.strip(), original)
+    result = clean_by_rules(_gemini_call(model, prompt).text.strip(), original)
     return result if len(result) >= 25 else name
 
 
@@ -528,7 +543,7 @@ def verify_name(
         '{"final_name": "최종 상품명", "issues": "수정 사항 설명 (없으면 null)"}'
     )
     try:
-        response = model.generate_content(prompt)
+        response = _gemini_call(model, prompt)
         raw = response.text.strip()
         if raw.startswith("```"):
             lines = raw.splitlines()
@@ -572,7 +587,7 @@ def extract_search_query(original: str, model) -> str:
         "결과만 출력하세요."
     )
     try:
-        return model.generate_content(prompt).text.strip()
+        return _gemini_call(model, prompt).text.strip()
     except Exception:
         return original
 
@@ -607,7 +622,7 @@ def fallback_by_shopping_search(
             "▶ 순수 텍스트 상품명 1개만 출력"
         )
         try:
-            result = model.generate_content(prompt).text.strip()
+            result = _gemini_call(model, prompt).text.strip()
             cleaned = clean_by_rules(result, original)
             if len(cleaned) < 25:
                 cleaned = enforce_min_length(cleaned, original, [], model)
@@ -626,7 +641,7 @@ def fallback_by_shopping_search(
         "▶ 순수 텍스트 상품명 1개만 출력"
     )
     try:
-        result = model.generate_content(prompt).text.strip()
+        result = _gemini_call(model, prompt).text.strip()
         cleaned = clean_by_rules(result, original)
         if len(cleaned) < 25:
             cleaned = enforce_min_length(cleaned, original, competitor_names, model)
