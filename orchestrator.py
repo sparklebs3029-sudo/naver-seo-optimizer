@@ -186,9 +186,11 @@ def validate_result(
             failures.append(f"배송 관련 문구 잔존: '{term}'")
             break
 
-    # 4. 원본에 없는 속성 단어 추가 여부 (word_pool에 있으면 DataLab 검증된 키워드이므로 허용)
+    # 4. 원본에 없는 속성 단어 추가 여부 (복합어 내 속성어는 검사 제외, word_pool 허용)
     for word in ATTRIBUTE_WORDS:
-        if word in final_name and word not in original:
+        # 복합어(붙여쓰기) 안에 포함된 속성어는 오탐 방지를 위해 단어 경계로 검사
+        _pattern = r'(?<![가-힣a-zA-Z])' + _re.escape(word) + r'(?![가-힣a-zA-Z])'
+        if _re.search(_pattern, final_name) and word not in original:
             if word_pool is None or word not in word_pool:
                 failures.append(f"원본에 없는 속성 추가: '{word}' — 원본에 있는 속성만 사용하세요")
                 break

@@ -24,7 +24,7 @@ from naver_seo_agent import (
 )
 from orchestrator import run_with_orchestration, OrchestratorReport
 
-APP_VERSION = "v1.6.1"  # CookieManager cache_resource 제거, 매 렌더 직접 인스턴스화
+APP_VERSION = "v1.7.0"  # SEO 최적화 실패 원인 수정 및 로그 개선
 
 st.set_page_config(
     page_title="셀러부스트",
@@ -342,10 +342,15 @@ with tab1:
 
                             retry_note = f" (재시도 {report.attempts}회)" if report.attempts > 1 else ""
                             warn_note  = " ⚠️" if not report.passed_validation else ""
+                            fail_note  = ""
+                            if not report.passed_validation and report.validation_failures:
+                                last_fail = report.validation_failures[-1]
+                                fail_note = f"\n  사유 : {last_fail}"
                             state.log.append(
                                 f"[{i}/{len(drows)}]{retry_note}{warn_note}\n"
                                 f"  원본 : {original}\n"
                                 f"  최종 : {final_name}  ({len(final_name)}자)"
+                                f"{fail_note}"
                             )
                             state.progress = i
 
