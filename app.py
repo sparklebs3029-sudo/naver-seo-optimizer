@@ -3,12 +3,14 @@
 네이버 SEO 상품명 최적화 + 상품 소싱 - Streamlit 웹앱
 """
 
+import base64
 import io
 import json
 import os
 import pathlib
 import threading
 import time
+from mimetypes import guess_extension
 import streamlit as st
 import google.generativeai as genai
 import openpyxl
@@ -23,8 +25,9 @@ from naver_seo_agent import (
     get_trending_products,
 )
 from orchestrator import run_with_orchestration, OrchestratorReport
+from image_editor.backend import DriveUploadError, export_xlsx, load_xlsx, upload_to_drive
 
-APP_VERSION = "v1.7.5"  # 3회 이상 중복 단어: 세분화 키워드 우선 보존하며 2회로 축소
+APP_VERSION = "v1.8.0"  # 이미지 수정 탭 추가
 
 st.set_page_config(
     page_title="셀러부스트",
@@ -93,6 +96,33 @@ if not st.session_state.gemini_key:
 
 if "daily_file_count" not in st.session_state:
     st.session_state.daily_file_count = {}
+
+for _k, _v in [
+    ("image_editor_saved_data", {}),
+    ("image_editor_last_file_name", ""),
+]:
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+
+def _guess_upload_ext(uploaded) -> str:
+    suffix = pathlib.Path(uploaded.name).suffix.lower()
+    if suffix:
+        return suffix
+
+    guessed = guess_extension(uploaded.type or "")
+    return guessed or ".png"
+
+
+def _build_drive_filename(prod_no: str, slot: str, uploaded) -> str:
+    return f"{prod_no}_{slot}{_guess_upload_ext(uploaded)}"
+
+
+def _image_summary(product: dict) -> str:
+    detail_count = len(product.get("detail_imgs") or [])
+    cl_state = "O" if product.get("img_cl") else "-"
+    cm_state = "O" if product.get("img_cm") else "-"
+    return f"{product['prod_no']} | {product['prod_name']} | CL:{cl_state} CM:{cm_state} 상세:{detail_count}"
 
 
 # ── 배치 처리 상태 클래스 ──────────────────────────────────────────
@@ -165,7 +195,7 @@ with st.sidebar:
 
 
 # ── 탭 구성 ──────────────────────────────────────────────────────────
-tab1, tab2 = st.tabs(["상품명 최적화", "상품 소싱"])
+tab1, tab2, tab3 = st.tabs(["상품명 최적화", "상품 소싱", "이미지 수정"])
 
 
 # ════════════════════════════════════════════════════════════════════
@@ -577,3 +607,168 @@ with tab2:
             import pandas as pd
             df = pd.DataFrame(results_sorted)[["키워드", "트렌드점수", "상품명", "최저가", "쇼핑몰", "카테고리"]]
             st.dataframe(df, use_container_width=True, hide_index=True)
+
+
+# ════════════════════════════════════════════════════════════════════
+# TAB 3: 이미지 수정
+# ════════════════════════════════════════════════════════════════════
+with tab3:
+    st.subheader("상품 이미지 수정")
+    st.caption("샵플링 엑셀을 불러와 상품별 대표 이미지를 교체하고, Drive 업로드 후 결과 엑셀을 다시 내려받습니다.")
+
+    uploaded_image_file = st.file_uploader(
+        "이미지 수정용 엑셀 업로드 (.xlsx)",
+        type=["xlsx"],
+        key="image_editor_file",
+        help="A열 상품번호 기준으로 90열(CL), 91열(CM) 이미지 URL을 갱신합니다.",
+    )
+
+    if uploaded_image_file:
+        image_xlsx_bytes = uploaded_image_file.read()
+        st.session_state.image_editor_last_file_name = uploaded_image_file.name
+
+        try:
+            products, _row_map = load_xlsx(image_xlsx_bytes)
+        except Exception as exc:
+            st.error(f"엑셀을 읽는 중 오류가 발생했습니다: {exc}")
+            products = []
+
+        if products:
+            editable_products = [
+                product for product in products
+                if product.get("prod_no") and (
+                    product.get("img_cl") or product.get("img_cm") or product.get("detail_imgs")
+                )
+            ]
+
+            st.info(
+                f"총 {len(products)}개 상품을 읽었습니다. "
+                f"이미지 정보가 있는 상품은 {len(editable_products)}개입니다."
+            )
+
+            if editable_products:
+                selected_idx = st.selectbox(
+                    "수정할 상품 선택",
+                    range(len(editable_products)),
+                    format_func=lambda idx: _image_summary(editable_products[idx]),
+                    key="image_editor_selected_idx",
+                )
+                product = editable_products[selected_idx]
+                prod_no = product["prod_no"]
+                saved_data = st.session_state.image_editor_saved_data
+                current_saved = saved_data.get(prod_no, {})
+
+                st.markdown(f"**상품번호**: `{prod_no}`")
+                st.markdown(f"**상품명**: {product.get('prod_name') or '-'}")
+
+                preview_cols = st.columns(2)
+                image_slots = [
+                    ("cl", "대표 이미지(CL)", product.get("img_cl")),
+                    ("cm", "부가 이미지(CM)", product.get("img_cm")),
+                ]
+                for idx, (slot_key, label, original_url) in enumerate(image_slots):
+                    with preview_cols[idx]:
+                        applied_url = current_saved.get(f"{slot_key}_url") or original_url
+                        st.markdown(f"**{label}**")
+                        if applied_url:
+                            st.image(applied_url, use_container_width=True)
+                            st.caption(applied_url)
+                        else:
+                            st.caption("현재 등록된 이미지가 없습니다.")
+
+                detail_imgs = product.get("detail_imgs") or []
+                if detail_imgs:
+                    with st.expander(f"상세 이미지 URL {len(detail_imgs)}개 보기"):
+                        for url in detail_imgs:
+                            st.code(url, language=None)
+
+                new_cl_file = st.file_uploader(
+                    "새 대표 이미지(CL)",
+                    type=["png", "jpg", "jpeg", "webp"],
+                    key=f"image_editor_cl_{prod_no}",
+                )
+                new_cm_file = st.file_uploader(
+                    "새 부가 이미지(CM)",
+                    type=["png", "jpg", "jpeg", "webp"],
+                    key=f"image_editor_cm_{prod_no}",
+                )
+
+                save_disabled = not (new_cl_file or new_cm_file)
+                if st.button("이 상품 이미지 저장", type="primary", use_container_width=True, disabled=save_disabled):
+                    updated_entry = dict(current_saved)
+
+                    try:
+                        if new_cl_file:
+                            cl_data_url = (
+                                f"data:{new_cl_file.type or 'image/png'};base64,"
+                                f"{base64.b64encode(new_cl_file.getvalue()).decode('ascii')}"
+                            )
+                            cl_uploaded = upload_to_drive(
+                                _build_drive_filename(prod_no, "CL", new_cl_file),
+                                cl_data_url,
+                            )
+                            updated_entry["cl_url"] = cl_uploaded["public_url"]
+
+                        if new_cm_file:
+                            cm_data_url = (
+                                f"data:{new_cm_file.type or 'image/png'};base64,"
+                                f"{base64.b64encode(new_cm_file.getvalue()).decode('ascii')}"
+                            )
+                            cm_uploaded = upload_to_drive(
+                                _build_drive_filename(prod_no, "CM", new_cm_file),
+                                cm_data_url,
+                            )
+                            updated_entry["cm_url"] = cm_uploaded["public_url"]
+
+                        saved_data[prod_no] = updated_entry
+                        st.session_state.image_editor_saved_data = saved_data
+                        st.success("이미지를 저장하고 Drive URL을 엑셀 반영 대상에 등록했습니다.")
+                    except DriveUploadError as exc:
+                        st.error(f"Drive 업로드 오류: {exc}")
+                    except Exception as exc:
+                        st.error(f"이미지 저장 중 오류가 발생했습니다: {exc}")
+
+                if current_saved:
+                    st.caption(
+                        "현재 반영 예정 URL "
+                        f"CL: {current_saved.get('cl_url', '-')} / CM: {current_saved.get('cm_url', '-')}"
+                    )
+
+                if saved_data:
+                    st.divider()
+                    st.markdown(f"**반영 대기 상품 수**: {len(saved_data)}개")
+                    for saved_prod_no, saved_info in saved_data.items():
+                        st.write(
+                            f"- {saved_prod_no} | "
+                            f"CL {'등록' if saved_info.get('cl_url') else '-'} / "
+                            f"CM {'등록' if saved_info.get('cm_url') else '-'}"
+                        )
+
+                    export_name = f"{pathlib.Path(uploaded_image_file.name).stem}_이미지수정.xlsx"
+                    try:
+                        result_xlsx = export_xlsx(image_xlsx_bytes, saved_data)
+                        st.download_button(
+                            "수정된 엑셀 다운로드",
+                            data=result_xlsx,
+                            file_name=export_name,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            type="primary",
+                            use_container_width=True,
+                        )
+                    except Exception as exc:
+                        st.error(f"엑셀 생성 중 오류가 발생했습니다: {exc}")
+
+                    if st.button("이미지 수정 작업 초기화", use_container_width=True):
+                        st.session_state.image_editor_saved_data = {}
+                        st.rerun()
+            else:
+                st.warning("엑셀에서 이미지 정보가 있는 상품을 찾지 못했습니다.")
+        else:
+            st.warning("표시할 상품 데이터가 없습니다.")
+    else:
+        st.markdown(
+            "**사용 방법**\n"
+            "1. 샵플링 엑셀 파일 업로드\n"
+            "2. 상품 선택 후 CL 또는 CM 이미지 업로드\n"
+            "3. Drive 업로드 완료 후 결과 엑셀 다운로드"
+        )
