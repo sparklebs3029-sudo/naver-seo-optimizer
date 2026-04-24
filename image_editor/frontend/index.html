@@ -246,6 +246,7 @@
     let cvScale = 1;
     let compareClDataUrl = '';
     let compareCmDataUrl = '';
+    let loadedProdNo = '';
 
     const cv = document.getElementById('cv');
     const ctx = cv.getContext('2d', { willReadFrequently: true });
@@ -367,6 +368,7 @@
 
     function selectProduct(i) {
       idx = i;
+      loadedProdNo = '';
       compareClDataUrl = '';
       compareCmDataUrl = '';
       const p = products[i];
@@ -391,7 +393,12 @@
     function requestLoadImage(url, thumbIdx) {
       curUrl = url;
       curThumbIdx = thumbIdx;
+      loadedProdNo = '';
       renderThumbs(currentUrls);
+      cv.style.display = 'none';
+      document.getElementById('no-msg').style.display = 'block';
+      document.getElementById('btn-save').disabled = true;
+      document.getElementById('crop-info').textContent = '';
       setLoading('이미지를 불러오는 중...');
       sendAction({
         action: 'fetch_image',
@@ -401,13 +408,14 @@
       });
     }
 
-    function loadCanvasFromDataUrl(dataUrl, sourceUrl, thumbIdx) {
+    function loadCanvasFromDataUrl(dataUrl, sourceUrl, thumbIdx, prodNo) {
       const img = new Image();
       img.onload = () => {
         cv.width = img.width;
         cv.height = img.height;
         ctx.clearRect(0, 0, cv.width, cv.height);
         ctx.drawImage(img, 0, 0);
+        loadedProdNo = String(prodNo || '');
         curUrl = sourceUrl;
         curThumbIdx = thumbIdx;
         undos = [];
@@ -440,6 +448,7 @@
       document.getElementById('no-msg').style.display = 'block';
       document.getElementById('btn-save').disabled = true;
       document.getElementById('crop-info').textContent = '';
+      loadedProdNo = '';
       curUrl = '';
       curThumbIdx = -1;
       renderThumbs(currentUrls);
@@ -684,6 +693,10 @@
         snap = null;
       }
       const p = products[idx];
+      if (String(loadedProdNo || '') !== String(p.prod_no || '')) {
+        alert('현재 상품 이미지를 모두 불러온 뒤 저장해주세요.');
+        return;
+      }
       const exportCanvas = document.createElement('canvas');
       exportCanvas.width = 800;
       exportCanvas.height = 800;
@@ -760,12 +773,13 @@
       }
 
       if (res.action === 'fetch_image') {
-        if (String(res.prod_no || '') === String(products[idx]?.prod_no || '')) {
+        const isCurrentProduct = String(res.prod_no || '') === String(products[idx]?.prod_no || '');
+        if (isCurrentProduct) {
           compareClDataUrl = res.compare_cl_data_url || '';
           compareCmDataUrl = res.compare_cm_data_url || '';
           if (products[idx]) updateCompareImages(products[idx]);
+          loadCanvasFromDataUrl(res.data_url, res.url, res.thumb_idx ?? 0, res.prod_no);
         }
-        loadCanvasFromDataUrl(res.data_url, res.url, res.thumb_idx ?? 0);
       } else if (res.action === 'save_image') {
         handleSaveResult(res);
       } else if (res.action === 'export_xlsx') {
