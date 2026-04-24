@@ -35,11 +35,27 @@ APP_VERSION = "v1.8.0"  # 이미지 수정 탭 추가
 st.set_page_config(
     page_title="셀러부스트",
     page_icon="🛒",
-    layout="centered",
+    layout="wide",
 )
 
 st.title("셀러부스트")
 st.caption(f"네이버 SEO 상품명 최적화 + 트렌드 상품 소싱  |  {APP_VERSION}")
+st.markdown(
+    """
+    <style>
+    .block-container {
+        max-width: 96rem;
+        padding-top: 1.2rem;
+        padding-left: 2rem;
+        padding-right: 2rem;
+    }
+    iframe[title="image_editor.image_editor"] {
+        width: 100% !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 # ── 쿠키 매니저 (브라우저에 API 키 영구 저장) ────────────────────────
 # @st.cache_resource 사용 금지: CookieManager는 위젯 컴포넌트이므로 매 렌더 실행 필요
