@@ -20,6 +20,7 @@ from naver_seo_agent import (
     optimize_name, clean_by_rules, verify_name, enforce_min_length,
     fallback_by_shopping_search, strip_product_code,
     build_word_pool, filter_to_pool,
+    get_reverse_compounds,
     _gemini_call,
 )
 
@@ -282,6 +283,24 @@ def run_with_orchestration(
             stage = "키워드 분류"
             core_keywords, aux_words = classify_keywords(top_keywords, original_clean, classify_model)
             _progress(attempt, "2.5/4 키워드 분류 완료", f"핵심: {core_keywords} / 보조: {aux_words}")
+
+            # Stage 2.6: 역순 복합어 DataLab 검증 (검색량 없는 보조 단어 폐기)
+            stage = "역순 복합어 검증"
+            reverse_compounds = get_reverse_compounds(core_keywords, aux_words)
+            if any(reverse_compounds):
+                rev_search = query_search_trend(
+                    [c for c in reverse_compounds if c], naver_id, naver_secret
+                )
+                rev_shop = query_shopping_insight(
+                    [c for c in reverse_compounds if c], category_id, naver_id, naver_secret
+                )
+                if rev_search or rev_shop:  # DataLab 완전 실패 시엔 필터링 건너뜀
+                    aux_words = [
+                        aux if (rev_search.get(rc, 0) + rev_shop.get(rc, 0)) > 0 else ""
+                        for aux, rc in zip(aux_words, reverse_compounds)
+                    ]
+                    kept = [rc for rc, a in zip(reverse_compounds, aux_words) if a]
+                    _progress(attempt, "2.6/4 역순 복합어 검증 완료", f"유효 역순어: {kept or '없음'}")
 
             # Stage 3: 최적화
             stage = "상품명 최적화"

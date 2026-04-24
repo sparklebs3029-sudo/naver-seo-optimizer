@@ -373,8 +373,13 @@ def classify_keywords(
         f"인기 키워드 목록: {', '.join(top_keywords)}\n\n"
         "아래 기준으로 분류하세요.\n\n"
         "핵심 키워드 3개: 검색량이 높고 상품을 직접 설명하는 복합 키워드. 상품명에서 절대 쪼개지 않음.\n"
-        "보조 단어 최대 3개: 핵심 키워드 바로 뒤에 붙였을 때 역방향으로 읽으면 유효한 검색어가 되는 짧은 단어(1~3음절).\n"
-        "  예: 핵심='반팔 롱 원피스', 보조='여자' → '반팔 롱 원피스 여자'를 뒤에서 읽으면 '여자원피스'\n\n"
+        "  ⭐ 반드시 자연스러운 한국어 어순(수식어→명사)을 유지하세요.\n"
+        "     예: '린넨 원피스' O / '원피스 린넨' X  |  '오버핏 롱원피스' O / '원피스 오버핏' X\n"
+        "  ⭐ 원본 상품명의 인접 단어 조합 순서를 최우선으로 반영하세요.\n"
+        "보조 단어 최대 3개: 앞 핵심 키워드의 마지막 단어 앞에 붙였을 때 실제 검색되는 복합어가 되는 짧은 단어(1~3음절).\n"
+        "  예: 핵심='린넨 원피스', 보조='여성' → '여성원피스' (실제 검색어)\n"
+        "  예: 핵심='롱 원피스', 보조='여자' → '여자원피스' (실제 검색어)\n"
+        "  보조 단어가 될 만한 후보가 없으면 빈 배열로 두세요.\n\n"
         "핵심 키워드가 3개 미만이면 관련 키워드를 조합해 보완하세요.\n"
         '다음 JSON 형식으로만 답변: {"core": ["핵심1", "핵심2", "핵심3"], "aux": ["보조1", "보조2", "보조3"]}'
     )
@@ -408,6 +413,19 @@ def build_guide_name(core_keywords: list[str], aux_words: list[str]) -> str:
             return name
     name = " ".join(core_keywords)
     return name[:50].rsplit(" ", 1)[0] if len(name) > 50 else name
+
+
+def get_reverse_compounds(core_keywords: list[str], aux_words: list[str]) -> list[str]:
+    """역순 복합어 후보 생성: aux[i] + last_word(core[i]) 형태.
+    DataLab 검색량 검증에 사용. 빈 aux는 빈 문자열 반환."""
+    compounds = []
+    for i, aux in enumerate(aux_words):
+        if i < len(core_keywords) and aux:
+            last_word = core_keywords[i].split()[-1]
+            compounds.append(aux + last_word)  # "여성" + "원피스" → "여성원피스"
+        else:
+            compounds.append("")
+    return compounds
 
 
 # ── 3단계: 최적화 에이전트 ─────────────────────────────────────────

@@ -24,7 +24,7 @@ from naver_seo_agent import (
 )
 from orchestrator import run_with_orchestration, OrchestratorReport
 
-APP_VERSION = "v1.7.3"  # Gemini Rate Limiter: 모든 API 호출에 4.5초 간격 강제 적용
+APP_VERSION = "v1.7.4"  # 역순 복합어 DataLab 검증 + 핵심 키워드 자연 어순 보장
 
 st.set_page_config(
     page_title="셀러부스트",
