@@ -748,6 +748,7 @@
     }
 
     function applyRender(args) {
+      handleActionResult(args.action_result);
       products = Array.isArray(args.products) ? args.products : [];
       saved = args.saved_data || {};
       renderSavedList();
@@ -782,13 +783,15 @@
             : ((Array.isArray(p.detail_imgs) && p.detail_imgs.length) ? p.detail_imgs : fallbackUrls);
           renderThumbs(currentUrls);
           renderList(document.getElementById('s-inp').value);
-          if (!curUrl && currentUrls.length) {
+          if (!curUrl && ui.selected_image_url && currentUrls.includes(ui.selected_image_url)) {
+            curUrl = ui.selected_image_url;
+            curThumbIdx = Number.isInteger(ui.selected_thumb_idx) ? ui.selected_thumb_idx : currentUrls.indexOf(ui.selected_image_url);
+            renderThumbs(currentUrls);
+          } else if (!curUrl && currentUrls.length) {
             requestLoadImage(currentUrls[0], 0);
           }
         }
       }
-
-      handleActionResult(args.action_result);
       Streamlit.setFrameHeight(document.documentElement.scrollHeight);
     }
 

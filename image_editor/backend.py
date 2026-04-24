@@ -102,22 +102,36 @@ def export_xlsx(xlsx_bytes: bytes, saved_data: dict) -> bytes:
 def fetch_image_as_b64(url: str) -> str:
     """이미지 URL을 base64 data URL로 반환 (CORS 프록시 대체)."""
     encoded_url = urllib.parse.quote(url, safe=':/?=&%#+@!')
-    req = urllib.request.Request(
-        encoded_url,
-        headers={
+    attempts = [
+        {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
             'Referer': encoded_url,
             'Accept': 'image/webp,image/apng,image/*,*/*;q=0.8',
         },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            data = resp.read()
-            content_type = resp.headers.get('Content-Type', 'image/jpeg').split(';')[0].strip()
-        b64 = base64.b64encode(data).decode('ascii')
-        return f'data:{content_type};base64,{b64}'
-    except Exception as exc:
-        raise RuntimeError(f'이미지 로드 실패: {url} → {exc}') from exc
+        {
+            'User-Agent': 'Mozilla/5.0',
+            'Referer': 'https://img.shopling.co.kr/',
+            'Accept': '*/*',
+        },
+        {
+            'User-Agent': 'Mozilla/5.0',
+            'Accept': '*/*',
+        },
+    ]
+
+    last_exc = None
+    for headers in attempts:
+        req = urllib.request.Request(encoded_url, headers=headers)
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                data = resp.read()
+                content_type = resp.headers.get('Content-Type', 'image/jpeg').split(';')[0].strip()
+            b64 = base64.b64encode(data).decode('ascii')
+            return f'data:{content_type};base64,{b64}'
+        except Exception as exc:
+            last_exc = exc
+
+    raise RuntimeError(f'이미지 로드 실패: {url} → {last_exc}') from last_exc
 
 
 def _get_drive_service():

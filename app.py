@@ -122,6 +122,7 @@ for _k, _v in [
     ("image_editor_action_result", None),
     ("image_editor_ui_state", {}),
     ("active_tab", "optimizer"),
+    ("image_editor_last_handled_request_id", ""),
 ]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
@@ -735,67 +736,69 @@ if selected_tab == "image_editor":
 
                 if component_action:
                     request_id = component_action.get("request_id", secrets.token_hex(8))
-                    st.session_state.image_editor_ui_state = component_action.get("ui_state", {})
-                    action = component_action.get("action")
+                    if request_id != st.session_state.image_editor_last_handled_request_id:
+                        st.session_state.image_editor_last_handled_request_id = request_id
+                        st.session_state.image_editor_ui_state = component_action.get("ui_state", {})
+                        action = component_action.get("action")
 
-                    try:
-                        if action == "fetch_image":
-                            data_url = fetch_image_as_b64(component_action["url"])
+                        try:
+                            if action == "fetch_image":
+                                data_url = fetch_image_as_b64(component_action["url"])
+                                st.session_state.image_editor_action_result = _build_image_action_result(
+                                    "fetch_image",
+                                    request_id=request_id,
+                                    url=component_action.get("url"),
+                                    thumb_idx=component_action.get("thumb_idx", 0),
+                                    data_url=data_url,
+                                )
+                            elif action == "save_image":
+                                prod_no = str(component_action["prod_no"])
+                                filename = component_action.get("filename") or f"{prod_no}_main.jpg"
+                                saved_entry = _save_editor_image(
+                                    prod_no,
+                                    filename,
+                                    component_action["data_url"],
+                                    st.session_state.image_editor_saved_data,
+                                )
+                                current_idx = int(st.session_state.image_editor_ui_state.get("selected_index", 0))
+                                next_idx = min(current_idx + 1, len(editable_products) - 1)
+                                st.session_state.image_editor_action_result = _build_image_action_result(
+                                    "save_image",
+                                    request_id=request_id,
+                                    filename=filename,
+                                    prod_no=prod_no,
+                                    preview_data_url=component_action.get("preview_data_url"),
+                                    cl_url=saved_entry.get("cl_url"),
+                                    cm_url=saved_entry.get("cm_url"),
+                                    next_index=next_idx if current_idx < len(editable_products) - 1 else current_idx,
+                                    saved_data=st.session_state.image_editor_saved_data,
+                                )
+                            elif action == "export_xlsx":
+                                out_name = f"{pathlib.Path(uploaded_image_file.name).stem}_이미지수정.xlsx"
+                                file_bytes = export_xlsx(image_xlsx_bytes, st.session_state.image_editor_saved_data)
+                                st.session_state.image_editor_action_result = _build_image_action_result(
+                                    "export_xlsx",
+                                    request_id=request_id,
+                                    filename=out_name,
+                                    file_b64=base64.b64encode(file_bytes).decode("ascii"),
+                                )
+                            st.rerun()
+                        except DriveUploadError as exc:
                             st.session_state.image_editor_action_result = _build_image_action_result(
-                                "fetch_image",
+                                action or "unknown",
+                                ok=False,
                                 request_id=request_id,
-                                url=component_action.get("url"),
-                                thumb_idx=component_action.get("thumb_idx", 0),
-                                data_url=data_url,
+                                error=str(exc),
                             )
-                        elif action == "save_image":
-                            prod_no = str(component_action["prod_no"])
-                            filename = component_action.get("filename") or f"{prod_no}_main.jpg"
-                            saved_entry = _save_editor_image(
-                                prod_no,
-                                filename,
-                                component_action["data_url"],
-                                st.session_state.image_editor_saved_data,
-                            )
-                            current_idx = int(st.session_state.image_editor_ui_state.get("selected_index", 0))
-                            next_idx = min(current_idx + 1, len(editable_products) - 1)
+                            st.rerun()
+                        except Exception as exc:
                             st.session_state.image_editor_action_result = _build_image_action_result(
-                                "save_image",
+                                action or "unknown",
+                                ok=False,
                                 request_id=request_id,
-                                filename=filename,
-                                prod_no=prod_no,
-                                preview_data_url=component_action.get("preview_data_url"),
-                                cl_url=saved_entry.get("cl_url"),
-                                cm_url=saved_entry.get("cm_url"),
-                                next_index=next_idx if current_idx < len(editable_products) - 1 else current_idx,
-                                saved_data=st.session_state.image_editor_saved_data,
+                                error=str(exc),
                             )
-                        elif action == "export_xlsx":
-                            out_name = f"{pathlib.Path(uploaded_image_file.name).stem}_이미지수정.xlsx"
-                            file_bytes = export_xlsx(image_xlsx_bytes, st.session_state.image_editor_saved_data)
-                            st.session_state.image_editor_action_result = _build_image_action_result(
-                                "export_xlsx",
-                                request_id=request_id,
-                                filename=out_name,
-                                file_b64=base64.b64encode(file_bytes).decode("ascii"),
-                            )
-                        st.rerun()
-                    except DriveUploadError as exc:
-                        st.session_state.image_editor_action_result = _build_image_action_result(
-                            action or "unknown",
-                            ok=False,
-                            request_id=request_id,
-                            error=str(exc),
-                        )
-                        st.rerun()
-                    except Exception as exc:
-                        st.session_state.image_editor_action_result = _build_image_action_result(
-                            action or "unknown",
-                            ok=False,
-                            request_id=request_id,
-                            error=str(exc),
-                        )
-                        st.rerun()
+                            st.rerun()
 
                 if st.session_state.image_editor_saved_data:
                     st.caption(f"현재 반영 대기 상품 수: {len(st.session_state.image_editor_saved_data)}개")
