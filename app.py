@@ -24,7 +24,7 @@ from naver_seo_agent import (
 )
 from orchestrator import run_with_orchestration, OrchestratorReport
 
-APP_VERSION = "v1.7.0"  # SEO 최적화 실패 원인 수정 및 로그 개선
+APP_VERSION = "v1.7.1"  # 파이프라인 전구간 예외 방어 처리
 
 st.set_page_config(
     page_title="셀러부스트",
@@ -343,9 +343,13 @@ with tab1:
                             retry_note = f" (재시도 {report.attempts}회)" if report.attempts > 1 else ""
                             warn_note  = " ⚠️" if not report.passed_validation else ""
                             fail_note  = ""
-                            if not report.passed_validation and report.validation_failures:
-                                last_fail = report.validation_failures[-1]
-                                fail_note = f"\n  사유 : {last_fail}"
+                            if not report.passed_validation:
+                                if report.validation_failures:
+                                    last_fail = report.validation_failures[-1]
+                                    fail_note = f"\n  사유 : {last_fail}"
+                                elif report.errors:
+                                    last_err = report.errors[-1]
+                                    fail_note = f"\n  오류 : [{last_err.stage}] {last_err.error_type} — {last_err.message[:80]}"
                             state.log.append(
                                 f"[{i}/{len(drows)}]{retry_note}{warn_note}\n"
                                 f"  원본 : {original}\n"

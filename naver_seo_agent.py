@@ -224,12 +224,23 @@ def generate_keyword_candidates(
         "JSON 배열 형식으로만 답변하세요: [\"키워드1\", \"키워드2\", ...]\n\n"
         f"상품명: {original}"
     )
-    response = model.generate_content(prompt)
-    raw = response.text.strip()
-    if raw.startswith("```"):
-        lines = raw.splitlines()
-        raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-    return json.loads(raw)
+    try:
+        response = model.generate_content(prompt)
+        raw = response.text.strip()
+        if raw.startswith("```"):
+            lines = raw.splitlines()
+            raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+        # JSON 배열이 텍스트 안에 섞여 있는 경우 추출
+        m = re.search(r'\[[\s\S]*?\]', raw)
+        if m:
+            raw = m.group(0)
+        result = json.loads(raw)
+        if isinstance(result, list) and result:
+            return result
+    except Exception:
+        pass
+    # 폴백: 원본 단어를 키워드로 사용
+    return [w for w in original.split() if len(w) >= 2][:15] or [original]
 
 
 def detect_category(original: str, model: genai.GenerativeModel) -> str:
@@ -263,10 +274,13 @@ def query_search_trend(keywords: list[str], client_id: str, client_secret: str) 
             "timeUnit":      "month",
             "keywordGroups": [{"groupName": kw, "keywords": [kw]} for kw in batch],
         }
-        data = _post_with_retry("https://openapi.naver.com/v1/datalab/search", headers, body)
-        for result in data.get("results", []):
-            ratios = [p["ratio"] for p in result.get("data", [])]
-            results[result["title"]] = sum(ratios) / len(ratios) if ratios else 0.0
+        try:
+            data = _post_with_retry("https://openapi.naver.com/v1/datalab/search", headers, body)
+            for result in data.get("results", []):
+                ratios = [p["ratio"] for p in result.get("data", [])]
+                results[result["title"]] = sum(ratios) / len(ratios) if ratios else 0.0
+        except Exception:
+            pass  # DataLab 실패 시 해당 배치 건너뜀
         time.sleep(0.2)
     return results
 
@@ -289,12 +303,15 @@ def query_shopping_insight(keywords: list[str], category_id: str, client_id: str
             "category":  category_id,
             "keyword":   [{"name": kw, "param": [kw]} for kw in batch],
         }
-        data = _post_with_retry(
-            "https://openapi.naver.com/v1/datalab/shopping/category/keywords", headers, body
-        )
-        for result in data.get("results", []):
-            ratios = [p["ratio"] for p in result.get("data", [])]
-            results[result["title"]] = sum(ratios) / len(ratios) if ratios else 0.0
+        try:
+            data = _post_with_retry(
+                "https://openapi.naver.com/v1/datalab/shopping/category/keywords", headers, body
+            )
+            for result in data.get("results", []):
+                ratios = [p["ratio"] for p in result.get("data", [])]
+                results[result["title"]] = sum(ratios) / len(ratios) if ratios else 0.0
+        except Exception:
+            pass  # DataLab 실패 시 해당 배치 건너뜀
         time.sleep(0.2)
     return results
 
@@ -405,8 +422,11 @@ def optimize_name(
         f"원본 상품명: {original}\n"
         f"초안(참고용): {guide_name}"
     )
-    response = model.generate_content(prompt)
-    return response.text.strip()
+    try:
+        response = model.generate_content(prompt)
+        return response.text.strip()
+    except Exception:
+        return guide_name  # AI 호출 실패 시 알고리즘 결과 반환
 
 
 # ── 4단계: 검수 (코드 규칙 + AI) ───────────────────────────────────
@@ -494,12 +514,12 @@ def verify_name(
         "다음 JSON 형식으로만 답변하세요:\n"
         '{"final_name": "최종 상품명", "issues": "수정 사항 설명 (없으면 null)"}'
     )
-    response = model.generate_content(prompt)
-    raw = response.text.strip()
-    if raw.startswith("```"):
-        lines = raw.splitlines()
-        raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
     try:
+        response = model.generate_content(prompt)
+        raw = response.text.strip()
+        if raw.startswith("```"):
+            lines = raw.splitlines()
+            raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
         data = json.loads(raw)
         final_name = data.get("final_name") or optimized
         issues_raw = data.get("issues")
