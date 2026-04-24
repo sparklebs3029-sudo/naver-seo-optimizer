@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Image Editor</title>
-  <script src="./streamlit-component-lib.js"></script>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: "Malgun Gothic", sans-serif; background: #1e1e2e; color: #cdd6f4; height: 100vh; overflow: hidden; }
@@ -25,6 +24,9 @@
 
     #main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
     #topbar { background: #11111b; padding: 8px 14px; display: flex; align-items: center; gap: 10px; border-bottom: 1px solid #313244; flex-shrink: 0; }
+    #app-tabs { display: flex; gap: 6px; margin-right: 4px; }
+    .app-tab-btn { padding: 5px 10px; border-radius: 5px; border: 1px solid #45475a; background: #181825; color: #cdd6f4; font-size: 11px; cursor: pointer; white-space: nowrap; }
+    .app-tab-btn.on { background: #f38ba8; color: #11111b; border-color: #f38ba8; font-weight: 700; }
     #topbar .info { flex: 1; min-width: 0; }
     #top-no { font-size: 10px; color: #6c7086; }
     #top-nm { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -102,6 +104,11 @@
 
     <div id="main">
       <div id="topbar">
+        <div id="app-tabs">
+          <button class="app-tab-btn" id="nav-optimizer" onclick="navigateTab('optimizer')">상품명 최적화</button>
+          <button class="app-tab-btn" id="nav-sourcing" onclick="navigateTab('sourcing')">상품 소싱</button>
+          <button class="app-tab-btn on" id="nav-image_editor" onclick="navigateTab('image_editor')">이미지 수정</button>
+        </div>
         <button class="btn" id="btn-prev" onclick="go(-1)" disabled>Prev</button>
         <div class="info">
           <div id="top-no"></div>
@@ -213,12 +220,17 @@
   </div>
 
   <script>
-    const Streamlit = window.Streamlit;
-
-    if (!Streamlit) {
-      document.body.innerHTML = '<div style="padding:24px;font-family:Malgun Gothic,sans-serif;color:#fff;background:#1e1e2e">Image editor frontend failed to load Streamlit component library.</div>';
-      throw new Error('Streamlit component library failed to load');
-    }
+    const Streamlit = {
+      setComponentReady() {
+        window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:componentReady", apiVersion: 1 }, "*");
+      },
+      setFrameHeight(height) {
+        window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setFrameHeight", height }, "*");
+      },
+      setComponentValue(value) {
+        window.parent.postMessage({ isStreamlitMessage: true, type: "streamlit:setComponentValue", value }, "*");
+      }
+    };
     let initialized = false;
     let products = [];
     let saved = {};
@@ -255,6 +267,10 @@
         ...payload,
         ui_state: collectUiState(),
       });
+    }
+
+    function navigateTab(tabName) {
+      sendAction({ action: 'navigate_tab', target_tab: tabName });
     }
 
     function collectUiState() {
@@ -740,6 +756,10 @@
     }
 
     function applyRender(args) {
+      ['optimizer', 'sourcing', 'image_editor'].forEach((name) => {
+        const el = document.getElementById('nav-' + name);
+        if (el) el.classList.toggle('on', name === 'image_editor');
+      });
       products = Array.isArray(args.products) ? args.products : [];
       saved = args.saved_data || {};
       renderSavedList();
@@ -902,12 +922,13 @@
     }
 
     function onRender(event) {
+      const data = event.data;
+      if (!data || data.type !== "streamlit:render") return;
       init();
-      const args = event.detail.args || {};
-      applyRender(args);
+      applyRender(data.args || {});
     }
 
-    Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, onRender);
+    window.addEventListener("message", onRender);
     Streamlit.setComponentReady();
     Streamlit.setFrameHeight(900);
   </script>

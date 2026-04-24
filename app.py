@@ -105,6 +105,7 @@ for _k, _v in [
     ("image_editor_last_file_name", ""),
     ("image_editor_action_result", None),
     ("image_editor_ui_state", {}),
+    ("active_tab", "optimizer"),
 ]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
@@ -243,14 +244,27 @@ with st.sidebar:
         st.warning("API 키를 모두 입력 후 저장해주세요")
 
 
-# ── 탭 구성 ──────────────────────────────────────────────────────────
-tab1, tab2, tab3 = st.tabs(["상품명 최적화", "상품 소싱", "이미지 수정"])
+# ── 상단 네비게이션 ─────────────────────────────────────────────────────
+tab_options = {
+    "optimizer": "상품명 최적화",
+    "sourcing": "상품 소싱",
+    "image_editor": "이미지 수정",
+}
+selected_tab_label = st.radio(
+    "메뉴",
+    list(tab_options.values()),
+    index=list(tab_options.keys()).index(st.session_state.active_tab),
+    horizontal=True,
+    label_visibility="collapsed",
+)
+selected_tab = next(key for key, value in tab_options.items() if value == selected_tab_label)
+st.session_state.active_tab = selected_tab
 
 
 # ════════════════════════════════════════════════════════════════════
 # TAB 1: 상품명 최적화
 # ════════════════════════════════════════════════════════════════════
-with tab1:
+if selected_tab == "optimizer":
     if not keys_ready:
         st.info("왼쪽 사이드바에 API 키를 먼저 입력하고 저장해주세요.")
 
@@ -542,7 +556,7 @@ with tab1:
 # ════════════════════════════════════════════════════════════════════
 # TAB 2: 상품 소싱
 # ════════════════════════════════════════════════════════════════════
-with tab2:
+if selected_tab == "sourcing":
     st.subheader("네이버 쇼핑 트렌드 상품 소싱")
     st.caption("DataLab 쇼핑인사이트 + 쇼핑 검색으로 현재 잘 팔리는 상품을 찾아드립니다.")
 
@@ -661,9 +675,8 @@ with tab2:
 # ════════════════════════════════════════════════════════════════════
 # TAB 3: 이미지 수정
 # ════════════════════════════════════════════════════════════════════
-with tab3:
+if selected_tab == "image_editor":
     st.subheader("상품 이미지 수정")
-    st.caption("기존 이미지 편집기 UI를 Streamlit 안에 반영했습니다. 상세 이미지에서 편집 후 Save and next로 Drive 저장하세요.")
 
     uploaded_image_file = st.file_uploader(
         "이미지 수정용 엑셀 업로드 (.xlsx)",
@@ -710,7 +723,13 @@ with tab3:
                     action = component_action.get("action")
 
                     try:
-                        if action == "fetch_image":
+                        if action == "navigate_tab":
+                            target_tab = component_action.get("target_tab")
+                            if target_tab in tab_options:
+                                st.session_state.active_tab = target_tab
+                            st.session_state.image_editor_action_result = None
+                            st.rerun()
+                        elif action == "fetch_image":
                             data_url = fetch_image_as_b64(component_action["url"])
                             st.session_state.image_editor_action_result = _build_image_action_result(
                                 "fetch_image",
