@@ -4,6 +4,7 @@
 """
 
 import base64
+import hashlib
 import io
 import json
 import os
@@ -119,6 +120,7 @@ if "daily_file_count" not in st.session_state:
 for _k, _v in [
     ("image_editor_saved_data", {}),
     ("image_editor_last_file_name", ""),
+    ("image_editor_file_fingerprint", ""),
     ("image_editor_action_result", None),
     ("image_editor_ui_state", {}),
     ("active_tab", "optimizer"),
@@ -164,6 +166,18 @@ def _safe_fetch_image_data(url: str) -> str | None:
         return fetch_image_as_b64(url)
     except Exception:
         return None
+
+
+def _reset_image_editor_state() -> None:
+    st.session_state.image_editor_saved_data = {}
+    st.session_state.image_editor_action_result = None
+    st.session_state.image_editor_ui_state = {}
+    st.session_state.image_editor_last_handled_request_id = ""
+
+
+def _image_file_fingerprint(file_name: str, file_bytes: bytes) -> str:
+    digest = hashlib.sha1(file_bytes).hexdigest()[:16]
+    return f"{file_name}:{digest}"
 
 
 def _save_editor_image(prod_no: str, filename: str, data_url: str, saved_data: dict) -> dict:
@@ -755,6 +769,10 @@ if selected_tab == "image_editor":
     if uploaded_image_file:
         image_xlsx_bytes = uploaded_image_file.read()
         st.session_state.image_editor_last_file_name = uploaded_image_file.name
+        current_fingerprint = _image_file_fingerprint(uploaded_image_file.name, image_xlsx_bytes)
+        if st.session_state.image_editor_file_fingerprint != current_fingerprint:
+            _reset_image_editor_state()
+            st.session_state.image_editor_file_fingerprint = current_fingerprint
 
         try:
             products, _row_map = load_xlsx(image_xlsx_bytes)
@@ -831,12 +849,14 @@ if selected_tab == "image_editor":
                             elif action == "export_xlsx":
                                 out_name = f"{pathlib.Path(uploaded_image_file.name).stem}_이미지수정.xlsx"
                                 file_bytes = export_xlsx(image_xlsx_bytes, st.session_state.image_editor_saved_data)
-                                st.session_state.image_editor_action_result = _build_image_action_result(
+                                export_result = _build_image_action_result(
                                     "export_xlsx",
                                     request_id=request_id,
                                     filename=out_name,
                                     file_b64=base64.b64encode(file_bytes).decode("ascii"),
                                 )
+                                _reset_image_editor_state()
+                                st.session_state.image_editor_action_result = export_result
                             st.rerun()
                         except DriveUploadError as exc:
                             st.session_state.image_editor_action_result = _build_image_action_result(
