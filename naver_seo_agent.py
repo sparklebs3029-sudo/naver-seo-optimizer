@@ -251,9 +251,22 @@ def detect_category(original: str, model: genai.GenerativeModel) -> str:
         f"{categories_list}\n\n"
         f"상품명: {original}"
     )
-    response = model.generate_content(prompt)
-    category_name = response.text.strip()
-    return NAVER_CATEGORIES.get(category_name, "50000008")
+    try:
+        response = model.generate_content(prompt)
+        category_name = response.text.strip()
+        for name in NAVER_CATEGORIES:
+            if name in category_name:
+                return NAVER_CATEGORIES[name]
+        return NAVER_CATEGORIES.get(category_name, "50000000")
+    except Exception:
+        # API 실패 시 상품명 키워드로 간단 추정
+        _fashion = ["원피스", "티셔츠", "바지", "치마", "코트", "자켓", "블라우스", "니트", "패딩", "후드"]
+        if any(w in original for w in _fashion):
+            return "50000000"  # 패션의류
+        _bag = ["가방", "지갑", "모자", "신발", "슬리퍼", "샌들", "부츠"]
+        if any(w in original for w in _bag):
+            return "50000001"  # 패션잡화
+        return "50000000"  # 기본값: 패션의류
 
 
 # ── 2단계: 데이터랩 조회 ────────────────────────────────────────────

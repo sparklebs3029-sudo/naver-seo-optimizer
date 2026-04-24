@@ -24,7 +24,7 @@ from naver_seo_agent import (
 )
 from orchestrator import run_with_orchestration, OrchestratorReport
 
-APP_VERSION = "v1.7.1"  # 파이프라인 전구간 예외 방어 처리
+APP_VERSION = "v1.7.2"  # Gemini 429 처리: detect_category 폴백 + 대기 시간 증가
 
 st.set_page_config(
     page_title="셀러부스트",

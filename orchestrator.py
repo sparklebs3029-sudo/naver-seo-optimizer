@@ -119,8 +119,8 @@ def _classify_error(error: Exception) -> tuple[str, str, bool]:
     if isinstance(error, json.JSONDecodeError):
         return "JSON 파싱 오류", "AI 응답 형식 오류 — 재시도 시 해결 가능", True
 
-    if "quota" in err_str or "rate limit" in err_str or "resource_exhausted" in err_str:
-        return "API 한도 초과", "API 사용량 한도 초과 — 5초 대기 후 재시도", True
+    if any(k in err_str for k in ("quota", "rate limit", "resource_exhausted", "resource exhausted", "429")):
+        return "API 한도 초과", "API 사용량 한도 초과 — 10초 대기 후 재시도", True
 
     if "api_key" in err_str or "invalid" in err_str or "unauthorized" in err_str:
         return "API 인증 오류", "API 키 유효성 확인 필요 (자동 해결 불가)", False
@@ -321,7 +321,7 @@ def run_with_orchestration(
             _, _, auto_resolvable = _classify_error(e)
 
             if auto_resolvable:
-                wait = 5 if err_report.error_type == "API 한도 초과" else 1
+                wait = 10 if err_report.error_type == "API 한도 초과" else 2
                 time.sleep(wait)
                 err_report.resolved = True  # 재시도로 해결 시도함
 
