@@ -13,9 +13,9 @@ import streamlit as st
 import google.generativeai as genai
 import openpyxl
 from openpyxl.utils import get_column_letter
-from datetime import datetime
+from datetime import datetime, timedelta
 from dataclasses import dataclass, field
-from streamlit_cookies_controller import CookieController
+import extra_streamlit_components as stx
 
 from naver_seo_agent import (
     KEYWORD_SYSTEM, CLASSIFY_SYSTEM, OPTIMIZE_SYSTEM, VERIFY_SYSTEM, GEMINI_CONFIG,
@@ -24,7 +24,7 @@ from naver_seo_agent import (
 )
 from orchestrator import run_with_orchestration, OrchestratorReport
 
-APP_VERSION = "v1.5.5"  # 쿠키 컴포넌트 예외 처리 추가
+APP_VERSION = "v1.6.0"  # 쿠키 라이브러리 교체 (extra-streamlit-components)
 
 st.set_page_config(
     page_title="셀러부스트",
@@ -35,35 +35,39 @@ st.set_page_config(
 st.title("셀러부스트")
 st.caption(f"네이버 SEO 상품명 최적화 + 트렌드 상품 소싱  |  {APP_VERSION}")
 
-# ── 쿠키 컨트롤러 (브라우저에 API 키 영구 저장) ──────────────────────
-_cookies = CookieController()
+# ── 쿠키 매니저 (브라우저에 API 키 영구 저장) ────────────────────────
+@st.cache_resource
+def _get_cm():
+    return stx.CookieManager(key="sb_cm")
 
-# 쿠키 JS 컴포넌트가 초기화될 때까지 1회 rerun 대기
-if "cookie_rdy" not in st.session_state:
-    st.session_state.cookie_rdy = True
-    st.rerun()
+_cm = _get_cm()
 
-def _load_cookie_keys() -> dict | None:
+def _load_cookie_keys() -> dict:
     try:
-        g = _cookies.get("sb_gemini")
-        n = _cookies.get("sb_naver_id")
-        s = _cookies.get("sb_naver_secret")
-        if g is None and n is None:
-            return None
-        return {"gemini_key": g or "", "naver_id": n or "", "naver_secret": s or ""}
+        all_c = _cm.get_all() or {}
+        g = all_c.get("sb_gemini", "") or ""
+        n = all_c.get("sb_naver_id", "") or ""
+        s = all_c.get("sb_naver_secret", "") or ""
+        return {"gemini_key": g, "naver_id": n, "naver_secret": s}
     except Exception:
-        return None  # 컴포넌트 내부 상태 미초기화 시 안전하게 None 반환
+        return {}
 
 def _save_keys(gemini: str, naver_id: str, secret: str) -> None:
-    max_age = 365 * 24 * 3600  # 1년
-    _cookies.set("sb_gemini",        gemini,  max_age=max_age)
-    _cookies.set("sb_naver_id",      naver_id, max_age=max_age)
-    _cookies.set("sb_naver_secret",  secret,   max_age=max_age)
+    try:
+        exp = datetime.now() + timedelta(days=365)
+        _cm.set("sb_gemini",       gemini,   expires_at=exp, key="save_gem")
+        _cm.set("sb_naver_id",     naver_id, expires_at=exp, key="save_nid")
+        _cm.set("sb_naver_secret", secret,   expires_at=exp, key="save_ns")
+    except Exception:
+        pass
 
 def _delete_keys() -> None:
-    _cookies.remove("sb_gemini")
-    _cookies.remove("sb_naver_id")
-    _cookies.remove("sb_naver_secret")
+    try:
+        _cm.delete("sb_gemini",       key="del_gem")
+        _cm.delete("sb_naver_id",     key="del_nid")
+        _cm.delete("sb_naver_secret", key="del_ns")
+    except Exception:
+        pass
 
 # ── 세션 상태 초기화 (앱 첫 실행 시 저장된 키 자동 로드) ────────────
 if "keys_loaded" not in st.session_state:
