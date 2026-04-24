@@ -40,6 +40,7 @@
     .cmp-item { flex: 1; text-align: center; }
     .cmp-label { font-size: 9px; color: #89b4fa; margin-bottom: 3px; font-weight: 600; }
     .cmp-item img { width: 100%; border-radius: 4px; border: 1px solid #313244; background: #11111b; }
+    .cmp-url { margin-top: 4px; font-size: 9px; line-height: 1.35; color: #89b4fa; word-break: break-all; text-align: left; }
     .cmp-none { font-size: 9px; color: #45475a; padding: 20px 0; }
 
     #ptabs { display: flex; border-bottom: 1px solid #313244; }
@@ -124,11 +125,13 @@
                 <div class="cmp-label">CL</div>
                 <img id="cmp-cl" alt="" style="display:none">
                 <div id="cmp-cl-none" class="cmp-none">없음</div>
+                <div id="cmp-cl-url" class="cmp-url"></div>
               </div>
               <div class="cmp-item">
                 <div class="cmp-label">CM</div>
                 <img id="cmp-cm" alt="" style="display:none">
                 <div id="cmp-cm-none" class="cmp-none">없음</div>
+                <div id="cmp-cm-url" class="cmp-url"></div>
               </div>
             </div>
           </div>
@@ -298,17 +301,22 @@
 
     function updateCompareImages(p) {
       const slots = [
-        ['cmp-cl', 'cmp-cl-none', compareClDataUrl || p.img_cl],
-        ['cmp-cm', 'cmp-cm-none', compareCmDataUrl || p.img_cm],
+        ['cmp-cl', 'cmp-cl-none', 'cmp-cl-url', compareClDataUrl || p.img_cl, p.img_cl],
+        ['cmp-cm', 'cmp-cm-none', 'cmp-cm-url', compareCmDataUrl || p.img_cm, p.img_cm],
       ];
-      slots.forEach(([imgId, noneId, url]) => {
+      slots.forEach(([imgId, noneId, urlId, displayUrl, rawUrl]) => {
         const img = document.getElementById(imgId);
         const none = document.getElementById(noneId);
-        if (url) {
-          img.src = url;
+        const urlText = document.getElementById(urlId);
+        if (urlText) {
+          urlText.textContent = rawUrl || '-';
+        }
+        if (displayUrl) {
+          img.src = displayUrl;
           img.style.display = 'block';
           none.style.display = 'none';
         } else {
+          img.removeAttribute('src');
           img.style.display = 'none';
           none.style.display = 'block';
         }

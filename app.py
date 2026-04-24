@@ -705,6 +705,16 @@ if selected_tab == "image_editor":
     st.markdown(
         """
         <style>
+        h1, div[data-testid="stCaptionContainer"] {
+            display: none !important;
+        }
+        .block-container {
+            padding-top: 0.6rem !important;
+        }
+        div[role="radiogroup"] {
+            margin-top: 0 !important;
+            margin-bottom: 0.35rem !important;
+        }
         div[data-testid="stFileUploader"] > label,
         div[data-testid="stFileUploaderDropzoneInstructions"],
         div[data-testid="stFileUploaderDropzone"] small {
@@ -713,6 +723,12 @@ if selected_tab == "image_editor":
         div[data-testid="stFileUploaderDropzone"] {
             padding-top: 0.55rem !important;
             padding-bottom: 0.55rem !important;
+        }
+        div[data-testid="stFileUploader"] {
+            margin-bottom: 0.15rem !important;
+        }
+        div[data-testid="stHorizontalBlock"] p {
+            margin-bottom: 0 !important;
         }
         </style>
         """,
