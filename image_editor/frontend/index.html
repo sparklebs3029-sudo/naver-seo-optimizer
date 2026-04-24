@@ -233,6 +233,7 @@
     let curUrl = '';
     let curThumbIdx = -1;
     let lastHandledRequestId = null;
+    let requestSeq = 0;
     let undos = [];
     let snap = null;
     let cs = null, ce = null, cr = null, drag = false;
@@ -256,6 +257,7 @@
 
     function sendAction(payload) {
       Streamlit.setComponentValue({
+        request_id: payload.request_id || `${Date.now()}-${++requestSeq}`,
         ...payload,
         ui_state: collectUiState(),
       });
