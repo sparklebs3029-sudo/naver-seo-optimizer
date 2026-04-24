@@ -277,6 +277,7 @@
     function collectUiState() {
       return {
         selected_index: idx,
+        selected_prod_no: products[idx] ? String(products[idx].prod_no || '') : '',
         html_input: document.getElementById('html-input').value,
         current_urls: currentUrls,
         selected_image_url: curUrl,
@@ -830,12 +831,17 @@
           const fallbackUrls = [];
           if (p.img_cl) fallbackUrls.push(p.img_cl);
           if (p.img_cm && p.img_cm !== p.img_cl) fallbackUrls.push(p.img_cm);
-          currentUrls = Array.isArray(ui.current_urls) && ui.current_urls.length
+          const uiMatchesProduct = String(ui.selected_prod_no || '') === String(p.prod_no || '');
+          currentUrls = uiMatchesProduct && Array.isArray(ui.current_urls) && ui.current_urls.length
             ? ui.current_urls
             : ((Array.isArray(p.detail_imgs) && p.detail_imgs.length) ? p.detail_imgs : fallbackUrls);
+          if (!uiMatchesProduct) {
+            curUrl = '';
+            curThumbIdx = -1;
+          }
           renderThumbs(currentUrls);
           renderList(document.getElementById('s-inp').value);
-          if (!curUrl && ui.selected_image_url && currentUrls.includes(ui.selected_image_url)) {
+          if (!curUrl && uiMatchesProduct && ui.selected_image_url && currentUrls.includes(ui.selected_image_url)) {
             curUrl = ui.selected_image_url;
             curThumbIdx = Number.isInteger(ui.selected_thumb_idx) ? ui.selected_thumb_idx : currentUrls.indexOf(ui.selected_image_url);
             renderThumbs(currentUrls);
