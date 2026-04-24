@@ -24,7 +24,7 @@ from naver_seo_agent import (
 )
 from orchestrator import run_with_orchestration, OrchestratorReport
 
-APP_VERSION = "v1.5.2"  # validate_result check5 완전 제거
+APP_VERSION = "v1.5.4"  # 쿠키 자동 로드 타이밍 수정
 
 st.set_page_config(
     page_title="셀러부스트",
@@ -38,13 +38,18 @@ st.caption(f"네이버 SEO 상품명 최적화 + 트렌드 상품 소싱  |  {AP
 # ── 쿠키 컨트롤러 (브라우저에 API 키 영구 저장) ──────────────────────
 _cookies = CookieController()
 
-def _load_cookie_keys() -> dict:
-    g = _cookies.get("sb_gemini") or ""
-    n = _cookies.get("sb_naver_id") or ""
-    s = _cookies.get("sb_naver_secret") or ""
-    if g or n:
-        return {"gemini_key": g, "naver_id": n, "naver_secret": s}
-    return {}
+# 쿠키 JS 컴포넌트가 초기화될 때까지 1회 rerun 대기
+if "cookie_rdy" not in st.session_state:
+    st.session_state.cookie_rdy = True
+    st.rerun()
+
+def _load_cookie_keys() -> dict | None:
+    g = _cookies.get("sb_gemini")
+    n = _cookies.get("sb_naver_id")
+    s = _cookies.get("sb_naver_secret")
+    if g is None and n is None:  # JS 컴포넌트 아직 미초기화
+        return None
+    return {"gemini_key": g or "", "naver_id": n or "", "naver_secret": s or ""}
 
 def _save_keys(gemini: str, naver_id: str, secret: str) -> None:
     max_age = 365 * 24 * 3600  # 1년
@@ -70,7 +75,7 @@ if "keys_loaded" not in st.session_state:
     except Exception:
         pass
 
-    _saved = _from_secrets or _load_cookie_keys()
+    _saved = _from_secrets or (_load_cookie_keys() or {})
     st.session_state.gemini_key   = _saved.get("gemini_key",   "")
     st.session_state.naver_id     = _saved.get("naver_id",     "")
     st.session_state.naver_secret = _saved.get("naver_secret", "")
