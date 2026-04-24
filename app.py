@@ -24,7 +24,7 @@ from naver_seo_agent import (
 )
 from orchestrator import run_with_orchestration, OrchestratorReport
 
-APP_VERSION = "v1.6.0"  # 쿠키 라이브러리 교체 (extra-streamlit-components)
+APP_VERSION = "v1.6.1"  # CookieManager cache_resource 제거, 매 렌더 직접 인스턴스화
 
 st.set_page_config(
     page_title="셀러부스트",
@@ -36,21 +36,8 @@ st.title("셀러부스트")
 st.caption(f"네이버 SEO 상품명 최적화 + 트렌드 상품 소싱  |  {APP_VERSION}")
 
 # ── 쿠키 매니저 (브라우저에 API 키 영구 저장) ────────────────────────
-@st.cache_resource
-def _get_cm():
-    return stx.CookieManager(key="sb_cm")
-
-_cm = _get_cm()
-
-def _load_cookie_keys() -> dict:
-    try:
-        all_c = _cm.get_all() or {}
-        g = all_c.get("sb_gemini", "") or ""
-        n = all_c.get("sb_naver_id", "") or ""
-        s = all_c.get("sb_naver_secret", "") or ""
-        return {"gemini_key": g, "naver_id": n, "naver_secret": s}
-    except Exception:
-        return {}
+# @st.cache_resource 사용 금지: CookieManager는 위젯 컴포넌트이므로 매 렌더 실행 필요
+_cm = stx.CookieManager(key="sb_cm")
 
 def _save_keys(gemini: str, naver_id: str, secret: str) -> None:
     try:
@@ -69,25 +56,40 @@ def _delete_keys() -> None:
     except Exception:
         pass
 
-# ── 세션 상태 초기화 (앱 첫 실행 시 저장된 키 자동 로드) ────────────
-if "keys_loaded" not in st.session_state:
-    # Streamlit Secrets 우선 (클라우드 배포), 없으면 브라우저 쿠키
-    _from_secrets = {}
+# ── 세션 상태 초기화 ─────────────────────────────────────────────────
+# session_state 기본값 설정
+for _k, _v in [("gemini_key", ""), ("naver_id", ""), ("naver_secret", ""), ("keys_saved", False)]:
+    if _k not in st.session_state:
+        st.session_state[_k] = _v
+
+# 키가 아직 비어있을 때만 Secrets / 쿠키에서 로드 시도
+# (extra-streamlit-components는 컴포넌트 초기화 후 자동 rerun → 그 시점에 쿠키값 수신)
+if not st.session_state.gemini_key:
+    # 1) Streamlit Secrets 우선
     try:
         _g = st.secrets.get("GEMINI_API_KEY", "")
         _n = st.secrets.get("NAVER_CLIENT_ID", "")
         _s = st.secrets.get("NAVER_CLIENT_SECRET", "")
-        if _g or _n:
-            _from_secrets = {"gemini_key": _g, "naver_id": _n, "naver_secret": _s}
+        if _g:
+            st.session_state.gemini_key   = _g
+            st.session_state.naver_id     = _n
+            st.session_state.naver_secret = _s
+            st.session_state.keys_saved   = True
     except Exception:
         pass
 
-    _saved = _from_secrets or (_load_cookie_keys() or {})
-    st.session_state.gemini_key   = _saved.get("gemini_key",   "")
-    st.session_state.naver_id     = _saved.get("naver_id",     "")
-    st.session_state.naver_secret = _saved.get("naver_secret", "")
-    st.session_state.keys_saved   = bool(st.session_state.gemini_key)
-    st.session_state.keys_loaded  = True
+    # 2) 브라우저 쿠키 (Secrets 없을 때만)
+    if not st.session_state.gemini_key:
+        try:
+            _all = _cm.get_all() or {}
+            _g   = _all.get("sb_gemini", "") or ""
+            if _g:
+                st.session_state.gemini_key   = _g
+                st.session_state.naver_id     = _all.get("sb_naver_id",     "") or ""
+                st.session_state.naver_secret = _all.get("sb_naver_secret", "") or ""
+                st.session_state.keys_saved   = True
+        except Exception:
+            pass
 
 if "daily_file_count" not in st.session_state:
     st.session_state.daily_file_count = {}
