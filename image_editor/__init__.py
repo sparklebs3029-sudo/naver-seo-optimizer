@@ -2,7 +2,10 @@ import pathlib
 import streamlit.components.v1 as components
 
 _FRONTEND_DIR = pathlib.Path(__file__).parent / "frontend"
-_component_func = components.declare_component("image_editor", path=str(_FRONTEND_DIR))
+_component_func = None
+
+if _FRONTEND_DIR.exists():
+    _component_func = components.declare_component("image_editor", path=str(_FRONTEND_DIR))
 
 
 def image_editor(products: list, images_b64: dict, action_result: dict = None, key: str = None):
@@ -17,6 +20,9 @@ def image_editor(products: list, images_b64: dict, action_result: dict = None, k
     Returns:
         JS에서 요청한 액션 dict (action 필드 포함) 또는 None
     """
+    if _component_func is None:
+        return None
+
     return _component_func(
         products=products,
         images_b64=images_b64,
