@@ -32,11 +32,37 @@ ATTRIBUTE_WORDS = [
 
 import re as _re
 
+def _limit_word_repetition(tokens: list[str], max_repeats: int = 2) -> list[str]:
+    """같은 단어를 포함하는 토큰이 max_repeats 초과 시 짧은(덜 세분화된) 토큰을 제거.
+    예: ['여성', '원피스', '오버핏', '원피스', '중년원피스']
+        → '원피스' 포함 토큰 3개 → 짧은 '원피스'(idx=3) 제거
+        → ['여성', '원피스', '오버핏', '중년원피스']
+    긴 토큰(세분화 키워드) 우선 유지, 같은 길이면 앞 위치 우선 유지."""
+    from collections import defaultdict
+    word_indices: defaultdict[str, list[int]] = defaultdict(list)
+    for i, token in enumerate(tokens):
+        for base in tokens:
+            if len(base) >= 2 and base in token and i not in word_indices[base]:
+                word_indices[base].append(i)
+
+    remove_set: set[int] = set()
+    for base, indices in word_indices.items():
+        if len(indices) <= max_repeats:
+            continue
+        # 길이 내림차순, 같은 길이면 앞 위치(작은 인덱스) 우선 → 세분화 키워드 보존
+        sorted_idx = sorted(indices, key=lambda i: (len(tokens[i]), -i), reverse=True)
+        for idx in sorted_idx[max_repeats:]:
+            remove_set.add(idx)
+
+    return [t for i, t in enumerate(tokens) if i not in remove_set]
+
+
 def _final_cleanup(name: str, top_keywords: list[str]) -> str:
     """
     AI 결과와 무관하게 항상 적용되는 규칙 기반 최종 정리.
     - 특수문자 제거 (clean_by_rules보다 넓은 범위)
     - 중복 단어 제거
+    - 3회 이상 등장 단어: 세분화 키워드(긴 토큰) 우선 보존하며 2회로 축소
     - 50자 초과 시 단어 경계 자르기
     - 25자 미만 시 top_keywords 단어를 순서대로 추가
     """
@@ -44,13 +70,16 @@ def _final_cleanup(name: str, top_keywords: list[str]) -> str:
     name = _re.sub(r'[^\w\s가-힣ㄱ-ㅎㅏ-ㅣa-zA-Z0-9\+\-]', '', name)
     name = _re.sub(r'\s+', ' ', name).strip()
 
-    # 중복 단어 제거
+    # 완전 중복 단어 제거 (exact dedup)
     seen: set[str] = set()
     deduped: list[str] = []
     for w in name.split():
         if w not in seen:
             seen.add(w)
             deduped.append(w)
+
+    # 3회 이상 중복: 세분화 키워드(긴 토큰) 우선 보존, 2회로 축소
+    deduped = _limit_word_repetition(deduped, max_repeats=2)
     name = ' '.join(deduped)
 
     # 50자 초과 시 단어 경계에서 자르기

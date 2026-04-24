@@ -24,7 +24,7 @@ from naver_seo_agent import (
 )
 from orchestrator import run_with_orchestration, OrchestratorReport
 
-APP_VERSION = "v1.7.4"  # 역순 복합어 DataLab 검증 + 핵심 키워드 자연 어순 보장
+APP_VERSION = "v1.7.5"  # 3회 이상 중복 단어: 세분화 키워드 우선 보존하며 2회로 축소
 
 st.set_page_config(
     page_title="셀러부스트",
