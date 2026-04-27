@@ -66,6 +66,31 @@ def _openai_chat_completion(
     return data["choices"][0]["message"]["content"].strip()
 
 
+def _extend_name_with_keywords(name: str, extra_keywords: list[str], min_len: int = 25, max_len: int = 50) -> str:
+    """AI 호출 전에 규칙 기반으로 이름 길이를 보강합니다."""
+    cleaned = re.sub(r"\s+", " ", name).strip()
+    if len(cleaned) >= min_len:
+        return cleaned
+
+    existing = set(cleaned.split())
+    parts = [cleaned] if cleaned else []
+
+    for kw in extra_keywords:
+        for word in str(kw).split():
+            if not word or word in existing:
+                continue
+            candidate = " ".join(parts + [word]).strip()
+            if len(candidate) > max_len:
+                continue
+            parts.append(word)
+            existing.add(word)
+            cleaned = " ".join(parts).strip()
+            if len(cleaned) >= min_len:
+                return cleaned
+
+    return cleaned
+
+
 # ── 네이버 쇼핑 카테고리 ────────────────────────────────────────────
 NAVER_CATEGORIES = {
     "패션의류":     "50000000",
@@ -617,6 +642,13 @@ def enforce_min_length(name: str, original: str, top_keywords: list[str], model:
     """25자 미만인 경우 키워드를 추가해 재확장합니다."""
     if len(name) >= 25:
         return name
+    rule_extended = clean_by_rules(
+        _extend_name_with_keywords(name, top_keywords + original.split()),
+        original,
+        top_keywords,
+    )
+    if len(rule_extended) >= 25:
+        return rule_extended
     prompt = _build_enforce_min_length_prompt(name, original, top_keywords)
     try:
         result = clean_by_rules(_gemini_call(model, prompt).text.strip(), original)
@@ -673,6 +705,13 @@ def openai_enforce_min_length(
 ) -> str:
     if len(name) >= 25:
         return name
+    rule_extended = clean_by_rules(
+        _extend_name_with_keywords(name, top_keywords + original.split()),
+        original,
+        top_keywords,
+    )
+    if len(rule_extended) >= 25:
+        return rule_extended
     prompt = _build_enforce_min_length_prompt(name, original, top_keywords)
     result = clean_by_rules(_openai_chat_completion(OPTIMIZE_SYSTEM, prompt, api_key, model=model), original)
     return result if len(result) >= 25 else name

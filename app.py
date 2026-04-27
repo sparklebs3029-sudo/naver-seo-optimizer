@@ -379,6 +379,8 @@ if selected_tab == "optimizer":
 
             if report.fallback_stages:
                 st.info(f"OpenAI fallback 사용 단계: {', '.join(report.fallback_stages)}")
+                if report.fallback_details:
+                    st.caption(" / ".join(report.fallback_details))
 
             if not report.passed_validation and report.warning:
                 st.warning(f"오케스트레이터 경고: {report.warning}")
@@ -557,7 +559,6 @@ if selected_tab == "optimizer":
                             )
                             state.all_reports.append(report)
                             _ws.cell(row=row_idx, column=_col_idx).value = final_name
-                            time.sleep(4)  # Gemini 무료 플랜 분당 15회 제한 대응 (4초 = 최대 15/분)
 
                             unresolved = [e for e in report.errors if not e.resolved]
                             if unresolved:
@@ -566,6 +567,9 @@ if selected_tab == "optimizer":
                             retry_note = f" (재시도 {report.attempts}회)" if report.attempts > 1 else ""
                             warn_note  = " ⚠️" if not report.passed_validation else ""
                             fallback_note = f" [OpenAI fallback: {', '.join(report.fallback_stages)}]" if report.fallback_stages else ""
+                            fallback_detail_note = ""
+                            if report.fallback_details:
+                                fallback_detail_note = "\n  fallback: " + " / ".join(report.fallback_details)
                             fail_note  = ""
                             if not report.passed_validation:
                                 if report.validation_failures:
@@ -578,6 +582,7 @@ if selected_tab == "optimizer":
                                 f"[파일{file_idx}/{total_files}][{i}/{len(drows)}]{retry_note}{warn_note}{fallback_note}\n"
                                 f"  원본 : {original}\n"
                                 f"  최종 : {final_name}  ({len(final_name)}자)"
+                                f"{fallback_detail_note}"
                                 f"{fail_note}"
                             )
                             state.progress = i
@@ -677,6 +682,8 @@ if selected_tab == "optimizer":
                             st.warning(report.warning)
                         if report.fallback_stages:
                             st.info("OpenAI fallback: " + ", ".join(report.fallback_stages))
+                        if report.fallback_details:
+                            st.caption(" / ".join(report.fallback_details))
 
             retried = [r for r in all_reports if r.attempts > 1 and r.passed_validation]
             if retried:
@@ -697,6 +704,8 @@ if selected_tab == "optimizer":
                             f"- **{r.original[:45]}** → `{r.final_name[:45]}`  "
                             f"(단계: {', '.join(r.fallback_stages)})"
                         )
+                        if r.fallback_details:
+                            st.caption(" / ".join(r.fallback_details))
 
             if not hard_errors and retry_count == 0 and batch.done:
                 st.success("특이 사항 없음. 모든 상품명이 정상 최적화되었습니다.")
