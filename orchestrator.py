@@ -374,6 +374,7 @@ def run_with_orchestration(
                     raise
                 final_name, issues = openai_verify_name(original_clean, cleaned, openai_key, allowed_keywords=top_keywords)
                 _record_fallback(attempt, stage, e, "Gemini 429 감지 후 OpenAI fallback으로 검수 계속 진행")
+            final_name = clean_by_rules(final_name, original_clean, top_keywords)
             if len(final_name) < 25:
                 stage = "길이 보강"
                 try:
@@ -383,6 +384,7 @@ def run_with_orchestration(
                         raise
                     final_name = openai_enforce_min_length(final_name, original_clean, top_keywords, openai_key)
                     _record_fallback(attempt, stage, e, "Gemini 429 감지 후 OpenAI fallback으로 길이 보강 계속 진행")
+                final_name = clean_by_rules(final_name, original_clean, top_keywords)
 
             last_final_name = final_name
 
