@@ -335,7 +335,7 @@ def run_with_orchestration(
             stage = "상품명 최적화"
             _progress(attempt, "3/4 상품명 최적화 중...", f"핵심키워드: {', '.join(core_keywords)}")
             optimized = optimize_name(original_clean, core_keywords, aux_words, optimize_model)
-            cleaned = clean_by_rules(optimized, original_clean)
+            cleaned = clean_by_rules(optimized, original_clean, top_keywords)
 
             # Stage 4: 검수
             stage = "검수"

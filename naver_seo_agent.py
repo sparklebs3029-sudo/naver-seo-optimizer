@@ -486,12 +486,22 @@ def _remove_duplicate_words(text: str) -> str:
     return " ".join(result)
 
 
-def clean_by_rules(name: str, original: str = "") -> str:
+def clean_by_rules(name: str, original: str = "", top_keywords: list[str] | None = None) -> str:
     name = re.sub(r'[*#~`\[\](){}|/\\]', '', name)
     for term in DELIVERY_TERMS:
         name = name.replace(term, '')
     for word in PROMO_WORDS:
         name = re.sub(rf'\b{re.escape(word)}\b', '', name)
+    # 복합 토큰 내 홍보성 접두·접미어 제거 (DataLab 미검증 복합어에만 적용)
+    _kw_set = set(top_keywords) if top_keywords else set()
+    new_tokens = []
+    for token in name.split():
+        stripped = token
+        for word in PROMO_WORDS:
+            if word in stripped and stripped not in _kw_set:
+                stripped = stripped.replace(word, "")
+        new_tokens.append(stripped)
+    name = " ".join(t for t in new_tokens if t)
     for brand in BRAND_NAMES:
         if brand in name and brand not in original:
             name = name.replace(brand, '')
