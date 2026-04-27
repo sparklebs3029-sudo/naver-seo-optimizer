@@ -388,25 +388,30 @@ if selected_tab == "optimizer":
         # ── 처리 중이 아닐 때만 업로드/대기열 UI 표시 ───────────────
         if not batch.running and not ((batch.done or batch.stopped) and batch.file_results):
             # ── 파일 업로드 + 대기열 추가 ────────────────────────────
-            uploaded_file = st.file_uploader(
-                "엑셀 파일 업로드 (.xlsx)",
+            uploaded_files = st.file_uploader(
+                "엑셀 파일 업로드 (.xlsx) — 여러 파일 동시 드래그 가능",
                 type=["xlsx"],
-                help="파일을 드래그하거나 클릭해서 선택 → '대기열에 추가' 클릭. 여러 파일을 순서대로 추가할 수 있습니다.",
+                accept_multiple_files=True,
+                help="여러 파일을 한꺼번에 드래그하거나 하나씩 추가할 수 있습니다.",
                 key="optimizer_file",
             )
 
-            if uploaded_file:
-                already = any(item["name"] == uploaded_file.name for item in fq)
+            if uploaded_files:
+                new_files    = [f for f in uploaded_files if not any(q["name"] == f.name for q in fq)]
+                dup_names    = [f.name for f in uploaded_files if any(q["name"] == f.name for q in fq)]
+
+                btn_label = f"대기열에 추가 ({len(new_files)}개)" if len(new_files) > 1 else "대기열에 추가"
                 col_add, col_msg = st.columns([2, 3])
                 with col_add:
-                    add_btn = st.button("대기열에 추가", type="primary", use_container_width=True,
-                                        disabled=already)
+                    add_btn = st.button(btn_label, type="primary", use_container_width=True,
+                                        disabled=not new_files)
                 with col_msg:
-                    if already:
-                        st.warning(f"이미 추가됨: {uploaded_file.name}")
+                    if dup_names:
+                        st.warning(f"이미 추가됨: {', '.join(dup_names)}")
 
-                if add_btn and not already:
-                    fq.append({"name": uploaded_file.name, "bytes": uploaded_file.read()})
+                if add_btn and new_files:
+                    for f in new_files:
+                        fq.append({"name": f.name, "bytes": f.read()})
                     st.rerun()
 
             # ── 대기열 표시 ──────────────────────────────────────────
