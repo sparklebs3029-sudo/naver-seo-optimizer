@@ -741,12 +741,6 @@
       document.getElementById('exp-cnt').textContent = `${Object.keys(saved).length} item(s) saved`;
       renderSavedList();
       renderList(document.getElementById('s-inp').value);
-      if (typeof res.next_index === 'number' && res.next_index < products.length) {
-        idx = res.next_index;
-        selectProduct(idx);
-      } else {
-        document.getElementById('btn-save').disabled = false;
-      }
       clearLoading();
     }
 
@@ -819,7 +813,11 @@
         renderList('');
         clearCanvas();
       } else {
-        const nextIndex = Math.min(Math.max(ui.selected_index ?? idx ?? 0, 0), products.length - 1);
+        let _targetIdx = ui.selected_index ?? idx ?? 0;
+        if (args.action_result?.action === 'save_image' && typeof args.action_result?.next_index === 'number') {
+          _targetIdx = args.action_result.next_index;
+        }
+        const nextIndex = Math.min(Math.max(_targetIdx, 0), products.length - 1);
         if (products[nextIndex]) {
           idx = nextIndex;
           const p = products[idx];
