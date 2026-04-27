@@ -38,4 +38,5 @@ def image_editor(
         ui_state=ui_state or {},
         key=key,
         default=None,
+        height=820,
     )

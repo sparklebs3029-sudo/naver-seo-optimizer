@@ -758,13 +758,13 @@ if selected_tab == "image_editor":
             help="A열 상품번호 기준으로 90열(CL), 91열(CM) 이미지 URL을 갱신합니다.",
         )
     with status_col:
-        if st.session_state.image_editor_saved_data:
-            st.caption(f"현재 반영 대기 상품 수: {len(st.session_state.image_editor_saved_data)}개")
-            if st.button("이미지 수정 작업 초기화", use_container_width=True):
-                st.session_state.image_editor_saved_data = {}
-                st.session_state.image_editor_action_result = None
-                st.session_state.image_editor_ui_state = {}
-                st.rerun()
+        saved_count = len(st.session_state.image_editor_saved_data)
+        st.caption(f"현재 반영 대기 상품 수: {saved_count}개" if saved_count else " ")
+        if st.button("이미지 수정 작업 초기화", use_container_width=True, disabled=not saved_count):
+            st.session_state.image_editor_saved_data = {}
+            st.session_state.image_editor_action_result = None
+            st.session_state.image_editor_ui_state = {}
+            st.rerun()
 
     if uploaded_image_file:
         image_xlsx_bytes = uploaded_image_file.read()
