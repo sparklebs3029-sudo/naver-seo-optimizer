@@ -62,12 +62,13 @@ st.markdown(
 # @st.cache_resource 사용 금지: CookieManager는 위젯 컴포넌트이므로 매 렌더 실행 필요
 _cm = stx.CookieManager(key="sb_cm")
 
-def _save_keys(gemini: str, naver_id: str, secret: str) -> None:
+def _save_keys(gemini: str, naver_id: str, secret: str, openai: str) -> None:
     try:
         exp = datetime.now() + timedelta(days=365)
         _cm.set("sb_gemini",       gemini,   expires_at=exp, key="save_gem")
         _cm.set("sb_naver_id",     naver_id, expires_at=exp, key="save_nid")
         _cm.set("sb_naver_secret", secret,   expires_at=exp, key="save_ns")
+        _cm.set("sb_openai",       openai,   expires_at=exp, key="save_oa")
     except Exception:
         pass
 
@@ -76,12 +77,13 @@ def _delete_keys() -> None:
         _cm.delete("sb_gemini",       key="del_gem")
         _cm.delete("sb_naver_id",     key="del_nid")
         _cm.delete("sb_naver_secret", key="del_ns")
+        _cm.delete("sb_openai",       key="del_oa")
     except Exception:
         pass
 
 # ── 세션 상태 초기화 ─────────────────────────────────────────────────
 # session_state 기본값 설정
-for _k, _v in [("gemini_key", ""), ("naver_id", ""), ("naver_secret", ""), ("keys_saved", False)]:
+for _k, _v in [("gemini_key", ""), ("naver_id", ""), ("naver_secret", ""), ("openai_key", ""), ("keys_saved", False)]:
     if _k not in st.session_state:
         st.session_state[_k] = _v
 
@@ -93,10 +95,12 @@ if not st.session_state.gemini_key:
         _g = st.secrets.get("GEMINI_API_KEY", "")
         _n = st.secrets.get("NAVER_CLIENT_ID", "")
         _s = st.secrets.get("NAVER_CLIENT_SECRET", "")
+        _o = st.secrets.get("OPENAI_API_KEY", "")
         if _g:
             st.session_state.gemini_key   = _g
             st.session_state.naver_id     = _n
             st.session_state.naver_secret = _s
+            st.session_state.openai_key   = _o
             st.session_state.keys_saved   = True
     except Exception:
         pass
@@ -110,6 +114,7 @@ if not st.session_state.gemini_key:
                 st.session_state.gemini_key   = _g
                 st.session_state.naver_id     = _all.get("sb_naver_id",     "") or ""
                 st.session_state.naver_secret = _all.get("sb_naver_secret", "") or ""
+                st.session_state.openai_key   = _all.get("sb_openai",       "") or ""
                 st.session_state.keys_saved   = True
         except Exception:
             pass
@@ -266,6 +271,7 @@ with st.sidebar:
     gemini_key   = st.text_input("Gemini API Key",      value=st.session_state.gemini_key,   type="password", placeholder="AIzaSy...")
     naver_id     = st.text_input("Naver Client ID",     value=st.session_state.naver_id,     type="password")
     naver_secret = st.text_input("Naver Client Secret", value=st.session_state.naver_secret, type="password")
+    openai_key   = st.text_input("OpenAI API Key (선택)", value=st.session_state.openai_key, type="password", placeholder="sk-...")
 
     keys_ready = bool(gemini_key and naver_id and naver_secret)
 
@@ -275,18 +281,22 @@ with st.sidebar:
             st.session_state.gemini_key   = gemini_key
             st.session_state.naver_id     = naver_id
             st.session_state.naver_secret = naver_secret
+            st.session_state.openai_key   = openai_key
             st.session_state.keys_saved   = True
-            _save_keys(gemini_key, naver_id, naver_secret)
+            _save_keys(gemini_key, naver_id, naver_secret, openai_key)
     with col_clear:
         if st.button("삭제", use_container_width=True, disabled=not st.session_state.keys_saved):
             st.session_state.gemini_key   = ""
             st.session_state.naver_id     = ""
             st.session_state.naver_secret = ""
+            st.session_state.openai_key   = ""
             st.session_state.keys_saved   = False
             _delete_keys()
 
     if st.session_state.keys_saved and keys_ready:
         st.success("저장됨 — 다음 접속 시 자동 로드됩니다")
+        if st.session_state.openai_key:
+            st.caption("OpenAI fallback 활성화: Gemini 429 시 최적화/검수 단계만 우회합니다.")
     elif not keys_ready:
         st.warning("API 키를 모두 입력 후 저장해주세요")
 
@@ -332,7 +342,7 @@ if selected_tab == "optimizer":
                 'optimize': genai.GenerativeModel("gemini-2.0-flash", system_instruction=OPTIMIZE_SYSTEM, generation_config=GEMINI_CONFIG),
                 'verify':   genai.GenerativeModel("gemini-2.0-flash", system_instruction=VERIFY_SYSTEM,   generation_config=GEMINI_CONFIG),
             }
-            api_keys = {'naver_id': naver_id, 'naver_secret': naver_secret}
+            api_keys = {'naver_id': naver_id, 'naver_secret': naver_secret, 'openai_key': openai_key}
 
             status_ph = st.empty()
 
@@ -366,6 +376,9 @@ if selected_tab == "optimizer":
 
             if report.attempts > 1:
                 st.info(f"품질 기준 통과까지 {report.attempts}회 시도했습니다.")
+
+            if report.fallback_stages:
+                st.info(f"OpenAI fallback 사용 단계: {', '.join(report.fallback_stages)}")
 
             if not report.passed_validation and report.warning:
                 st.warning(f"오케스트레이터 경고: {report.warning}")
@@ -479,7 +492,7 @@ if selected_tab == "optimizer":
                     'optimize': genai.GenerativeModel("gemini-2.0-flash", system_instruction=OPTIMIZE_SYSTEM, generation_config=GEMINI_CONFIG),
                     'verify':   genai.GenerativeModel("gemini-2.0-flash", system_instruction=VERIFY_SYSTEM,   generation_config=GEMINI_CONFIG),
                 }
-                api_keys = {'naver_id': naver_id, 'naver_secret': naver_secret}
+                api_keys = {'naver_id': naver_id, 'naver_secret': naver_secret, 'openai_key': openai_key}
 
                 # 파일명은 메인 스레드에서 미리 계산 (스레드에서 session_state 쓰기 금지)
                 now          = datetime.now()
@@ -552,6 +565,7 @@ if selected_tab == "optimizer":
 
                             retry_note = f" (재시도 {report.attempts}회)" if report.attempts > 1 else ""
                             warn_note  = " ⚠️" if not report.passed_validation else ""
+                            fallback_note = f" [OpenAI fallback: {', '.join(report.fallback_stages)}]" if report.fallback_stages else ""
                             fail_note  = ""
                             if not report.passed_validation:
                                 if report.validation_failures:
@@ -561,7 +575,7 @@ if selected_tab == "optimizer":
                                     last_err = report.errors[-1]
                                     fail_note = f"\n  오류 : [{last_err.stage}] {last_err.error_type} — {last_err.message[:80]}"
                             state.log.append(
-                                f"[파일{file_idx}/{total_files}][{i}/{len(drows)}]{retry_note}{warn_note}\n"
+                                f"[파일{file_idx}/{total_files}][{i}/{len(drows)}]{retry_note}{warn_note}{fallback_note}\n"
                                 f"  원본 : {original}\n"
                                 f"  최종 : {final_name}  ({len(final_name)}자)"
                                 f"{fail_note}"
@@ -612,6 +626,7 @@ if selected_tab == "optimizer":
             hard_errors   = batch.hard_errors
             success_count = sum(1 for r in all_reports if not [e for e in r.errors if not e.resolved])
             retry_count   = sum(1 for r in all_reports if r.attempts > 1)
+            fallback_count = sum(1 for r in all_reports if r.fallback_stages)
             total_items   = len(all_reports)
 
             if batch.stopped:
@@ -621,6 +636,7 @@ if selected_tab == "optimizer":
                 st.success(
                     f"처리 완료: 파일 {files_done}개 / 상품명 {success_count}개 성공 / {len(hard_errors)}개 오류"
                     + (f" / {retry_count}개 재시도 발생" if retry_count else "")
+                    + (f" / {fallback_count}개 OpenAI fallback 사용" if fallback_count else "")
                 )
 
             st.divider()
@@ -637,11 +653,12 @@ if selected_tab == "optimizer":
                 st.session_state.file_queue = []
                 st.rerun()
 
-            c1, c2, c3, c4 = st.columns(4)
+            c1, c2, c3, c4, c5 = st.columns(5)
             c1.metric("전체",   total_items)
             c2.metric("성공",   success_count)
             c3.metric("오류",   len(hard_errors))
             c4.metric("재시도", retry_count)
+            c5.metric("Fallback", fallback_count)
 
             if hard_errors:
                 st.subheader("오류 목록")
@@ -658,6 +675,8 @@ if selected_tab == "optimizer":
                             )
                         if report.warning:
                             st.warning(report.warning)
+                        if report.fallback_stages:
+                            st.info("OpenAI fallback: " + ", ".join(report.fallback_stages))
 
             retried = [r for r in all_reports if r.attempts > 1 and r.passed_validation]
             if retried:
@@ -669,6 +688,15 @@ if selected_tab == "optimizer":
                         )
                         if r.validation_failures:
                             st.caption("실패 이유: " + " / ".join(r.validation_failures[:2]))
+
+            fallback_reports = [r for r in all_reports if r.fallback_stages]
+            if fallback_reports:
+                with st.expander(f"🔁 OpenAI fallback 사용 {len(fallback_reports)}건"):
+                    for r in fallback_reports:
+                        st.markdown(
+                            f"- **{r.original[:45]}** → `{r.final_name[:45]}`  "
+                            f"(단계: {', '.join(r.fallback_stages)})"
+                        )
 
             if not hard_errors and retry_count == 0 and batch.done:
                 st.success("특이 사항 없음. 모든 상품명이 정상 최적화되었습니다.")

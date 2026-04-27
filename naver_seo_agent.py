@@ -14,6 +14,8 @@ import requests
 import google.generativeai as genai
 import openpyxl
 
+OPENAI_FALLBACK_MODEL = "gpt-4.1-mini"
+
 # ── Gemini Rate Limiter (무료 티어 15 RPM 대응) ──────────────────────
 _GEMINI_MIN_INTERVAL = 4.5          # 초 (15 RPM = 4s 최소, 버퍼 0.5s)
 _gemini_last_call    = [0.0]
@@ -27,6 +29,41 @@ def _gemini_call(model, prompt: str):
             time.sleep(_GEMINI_MIN_INTERVAL - elapsed)
         _gemini_last_call[0] = time.time()
     return model.generate_content(prompt)
+
+
+def is_rate_limit_error(error: Exception) -> bool:
+    err_str = str(error).lower()
+    if isinstance(error, requests.exceptions.HTTPError):
+        status = error.response.status_code if error.response is not None else 0
+        return status == 429
+    return any(token in err_str for token in ("429", "quota", "rate limit", "resource_exhausted", "resource exhausted"))
+
+
+def _openai_chat_completion(
+    system_instruction: str,
+    prompt: str,
+    api_key: str,
+    model: str = OPENAI_FALLBACK_MODEL,
+) -> str:
+    response = requests.post(
+        "https://api.openai.com/v1/chat/completions",
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "model": model,
+            "temperature": 0,
+            "messages": [
+                {"role": "developer", "content": system_instruction},
+                {"role": "user", "content": prompt},
+            ],
+        },
+        timeout=60,
+    )
+    response.raise_for_status()
+    data = response.json()
+    return data["choices"][0]["message"]["content"].strip()
 
 
 # ── 네이버 쇼핑 카테고리 ────────────────────────────────────────────
@@ -428,6 +465,87 @@ def get_reverse_compounds(core_keywords: list[str], aux_words: list[str]) -> lis
     return compounds
 
 
+def _build_optimize_prompt(
+    original: str,
+    core_keywords: list[str],
+    aux_words: list[str],
+    guide_name: str,
+) -> str:
+    has_size  = bool(re.search(r'\d+\s*(cm|mm|m|L|ml|g|kg|인치|평|구|포|매|개|장|켤레|족)', original, re.IGNORECASE))
+    has_bonus = bool(re.search(r'1\+1|2\+1|증정|사은품', original))
+
+    size_note  = "원본에 사이즈/규격 정보가 있으므로 반드시 유지하고 상품명 뒤쪽에 배치하세요." if has_size  else "원본에 사이즈 정보가 없으므로 임의로 추가하지 마세요."
+    bonus_note = "원본에 1+1/증정 정보가 있으므로 반드시 유지하고 핵심키워드 뒤에 배치하세요." if has_bonus else "원본에 1+1/증정 정보가 없으므로 임의로 추가하지 마세요."
+    core_str   = " / ".join(core_keywords)
+    aux_str    = " / ".join(aux_words) if aux_words else "없음"
+
+    return (
+        "아래 구조를 따라 네이버 SEO 상품명을 완성하세요.\n\n"
+        "▶ 역순 조합 구조 (이 순서를 반드시 유지):\n"
+        f"  핵심 키워드: {core_str}\n"
+        f"  보조 단어: {aux_str}\n"
+        "  조합 규칙: [핵심1] [보조1] [핵심2] [보조2] [핵심3] [보조3]\n"
+        "  — 핵심 키워드는 절대 쪼개지 말 것. 보조 단어는 핵심 키워드 바로 뒤에 삽입.\n\n"
+        f"▶ 사이즈/규격: {size_note}\n"
+        f"▶ 1+1/증정: {bonus_note}\n"
+        "▶ 반드시 공백 포함 25자 이상 50자 이하\n"
+        "▶ 특수문자·배송 문구·홍보 수식어·원본에 없는 브랜드명 금지\n"
+        "▶ 순수 텍스트 상품명 1개만 출력\n\n"
+        f"원본 상품명: {original}\n"
+        f"초안(참고용): {guide_name}"
+    )
+
+
+def _build_enforce_min_length_prompt(name: str, original: str, top_keywords: list[str]) -> str:
+    keywords_str = ", ".join(top_keywords)
+    return (
+        f"다음 상품명이 {len(name)}자로 너무 짧습니다. 반드시 25자 이상 50자 이하로 늘려주세요.\n"
+        f"원본 상품명: {original}\n"
+        f"현재 상품명: {name}\n"
+        f"참고 키워드: {keywords_str}\n"
+        "현재 상품명을 기반으로 관련 키워드를 자연스럽게 추가해 25자 이상으로 확장하세요.\n"
+        "특수문자, 배송 문구, 홍보 수식어는 사용하지 마세요.\n"
+        "순수 텍스트 상품명만 답변하세요."
+    )
+
+
+def _build_verify_prompt(original: str, optimized: str, allowed_keywords: list[str] | None = None) -> str:
+    length = len(optimized)
+    length_note = ""
+    if length < 25:
+        length_note = f"현재 {length}자로 너무 짧습니다. 관련 키워드를 추가해 25자 이상으로 늘려주세요."
+    elif length > 50:
+        length_note = f"현재 {length}자로 너무 깁니다. 50자 이하로 줄여주세요."
+
+    allowed_section = ""
+    if allowed_keywords:
+        kw_str = ", ".join(allowed_keywords[:10])
+        allowed_section = (
+            f"\n⭐ 네이버 DataLab 검증 키워드 (절대 제거 금지): {kw_str}\n"
+            "   — 위 키워드는 원본에 없더라도 반드시 유지하세요.\n"
+        )
+
+    return (
+        "아래 최적화된 상품명을 검수하고 필요시 수정해주세요.\n\n"
+        f"원본 상품명: {original}\n"
+        f"최적화된 상품명: {optimized}\n"
+        f"{('⚠️ 글자수 조정 필요: ' + length_note) if length_note else ''}"
+        f"{allowed_section}\n"
+        "검수 기준:\n"
+        "1. 의미 없는 수식어 제거 (최고, 대박, 완전, 특가, 강추 등)\n"
+        "2. 중복 단어 제거\n"
+        "3. 원본 상품명에 없는 무관한 브랜드명 제거 (원본에 있는 브랜드는 유지)\n"
+        "4. 원본 상품과 완전히 무관한 키워드 제거 (DataLab 검증 키워드는 제외)\n"
+        "5. 네이버 금지 표현 제거\n"
+        "6. 공백 포함 25자 이상 50자 이하 유지 — 절대 25자 미만으로 줄이지 말 것 (단어 삭제 시 글자 수 확인 필수)\n"
+        "7. 원본에 없는 소재·형태·디자인 속성은 제거하되, DataLab 검증 키워드는 예외\n"
+        "   — DataLab 검증 키워드에 속성어가 포함된 복합어(예: 면원피스, 니트원피스, 린넨비치웨어)는 원본에 해당 속성어가 없더라도 반드시 유지\n"
+        "   — DataLab 검증 키워드가 아닌 단독 속성어 예: 긴팔, 반팔, 레이스, 면, 실크, 니트 등\n\n"
+        "다음 JSON 형식으로만 답변하세요:\n"
+        '{"final_name": "최종 상품명", "issues": "수정 사항 설명 (없으면 null)"}'
+    )
+
+
 # ── 3단계: 최적화 에이전트 ─────────────────────────────────────────
 def optimize_name(
     original: str,
@@ -448,30 +566,13 @@ def optimize_name(
     if not has_size and not has_bonus and 25 <= len(guide_name) <= 50:
         return guide_name
 
-    size_note  = "원본에 사이즈/규격 정보가 있으므로 반드시 유지하고 상품명 뒤쪽에 배치하세요." if has_size  else "원본에 사이즈 정보가 없으므로 임의로 추가하지 마세요."
-    bonus_note = "원본에 1+1/증정 정보가 있으므로 반드시 유지하고 핵심키워드 뒤에 배치하세요." if has_bonus else "원본에 1+1/증정 정보가 없으므로 임의로 추가하지 마세요."
-    core_str   = " / ".join(core_keywords)
-    aux_str    = " / ".join(aux_words) if aux_words else "없음"
-
-    prompt = (
-        "아래 구조를 따라 네이버 SEO 상품명을 완성하세요.\n\n"
-        "▶ 역순 조합 구조 (이 순서를 반드시 유지):\n"
-        f"  핵심 키워드: {core_str}\n"
-        f"  보조 단어: {aux_str}\n"
-        "  조합 규칙: [핵심1] [보조1] [핵심2] [보조2] [핵심3] [보조3]\n"
-        "  — 핵심 키워드는 절대 쪼개지 말 것. 보조 단어는 핵심 키워드 바로 뒤에 삽입.\n\n"
-        f"▶ 사이즈/규격: {size_note}\n"
-        f"▶ 1+1/증정: {bonus_note}\n"
-        "▶ 반드시 공백 포함 25자 이상 50자 이하\n"
-        "▶ 특수문자·배송 문구·홍보 수식어·원본에 없는 브랜드명 금지\n"
-        "▶ 순수 텍스트 상품명 1개만 출력\n\n"
-        f"원본 상품명: {original}\n"
-        f"초안(참고용): {guide_name}"
-    )
+    prompt = _build_optimize_prompt(original, core_keywords, aux_words, guide_name)
     try:
         response = _gemini_call(model, prompt)
         return response.text.strip()
-    except Exception:
+    except Exception as e:
+        if is_rate_limit_error(e):
+            raise
         return guide_name  # AI 호출 실패 시 알고리즘 결과 반환
 
 
@@ -516,18 +617,14 @@ def enforce_min_length(name: str, original: str, top_keywords: list[str], model:
     """25자 미만인 경우 키워드를 추가해 재확장합니다."""
     if len(name) >= 25:
         return name
-    keywords_str = ", ".join(top_keywords)
-    prompt = (
-        f"다음 상품명이 {len(name)}자로 너무 짧습니다. 반드시 25자 이상 50자 이하로 늘려주세요.\n"
-        f"원본 상품명: {original}\n"
-        f"현재 상품명: {name}\n"
-        f"참고 키워드: {keywords_str}\n"
-        "현재 상품명을 기반으로 관련 키워드를 자연스럽게 추가해 25자 이상으로 확장하세요.\n"
-        "특수문자, 배송 문구, 홍보 수식어는 사용하지 마세요.\n"
-        "순수 텍스트 상품명만 답변하세요."
-    )
-    result = clean_by_rules(_gemini_call(model, prompt).text.strip(), original)
-    return result if len(result) >= 25 else name
+    prompt = _build_enforce_min_length_prompt(name, original, top_keywords)
+    try:
+        result = clean_by_rules(_gemini_call(model, prompt).text.strip(), original)
+        return result if len(result) >= 25 else name
+    except Exception as e:
+        if is_rate_limit_error(e):
+            raise
+        return name
 
 
 def verify_name(
@@ -536,40 +633,7 @@ def verify_name(
     model: genai.GenerativeModel,
     allowed_keywords: list[str] | None = None,
 ) -> tuple[str, str | None]:
-    length = len(optimized)
-    length_note = ""
-    if length < 25:
-        length_note = f"현재 {length}자로 너무 짧습니다. 관련 키워드를 추가해 25자 이상으로 늘려주세요."
-    elif length > 50:
-        length_note = f"현재 {length}자로 너무 깁니다. 50자 이하로 줄여주세요."
-
-    allowed_section = ""
-    if allowed_keywords:
-        kw_str = ", ".join(allowed_keywords[:10])
-        allowed_section = (
-            f"\n⭐ 네이버 DataLab 검증 키워드 (절대 제거 금지): {kw_str}\n"
-            "   — 위 키워드는 원본에 없더라도 반드시 유지하세요.\n"
-        )
-
-    prompt = (
-        "아래 최적화된 상품명을 검수하고 필요시 수정해주세요.\n\n"
-        f"원본 상품명: {original}\n"
-        f"최적화된 상품명: {optimized}\n"
-        f"{('⚠️ 글자수 조정 필요: ' + length_note) if length_note else ''}"
-        f"{allowed_section}\n"
-        "검수 기준:\n"
-        "1. 의미 없는 수식어 제거 (최고, 대박, 완전, 특가, 강추 등)\n"
-        "2. 중복 단어 제거\n"
-        "3. 원본 상품명에 없는 무관한 브랜드명 제거 (원본에 있는 브랜드는 유지)\n"
-        "4. 원본 상품과 완전히 무관한 키워드 제거 (DataLab 검증 키워드는 제외)\n"
-        "5. 네이버 금지 표현 제거\n"
-        "6. 공백 포함 25자 이상 50자 이하 유지 — 절대 25자 미만으로 줄이지 말 것 (단어 삭제 시 글자 수 확인 필수)\n"
-        "7. 원본에 없는 소재·형태·디자인 속성은 제거하되, DataLab 검증 키워드는 예외\n"
-        "   — DataLab 검증 키워드에 속성어가 포함된 복합어(예: 면원피스, 니트원피스, 린넨비치웨어)는 원본에 해당 속성어가 없더라도 반드시 유지\n"
-        "   — DataLab 검증 키워드가 아닌 단독 속성어 예: 긴팔, 반팔, 레이스, 면, 실크, 니트 등\n\n"
-        "다음 JSON 형식으로만 답변하세요:\n"
-        '{"final_name": "최종 상품명", "issues": "수정 사항 설명 (없으면 null)"}'
-    )
+    prompt = _build_verify_prompt(original, optimized, allowed_keywords)
     try:
         response = _gemini_call(model, prompt)
         raw = response.text.strip()
@@ -581,8 +645,56 @@ def verify_name(
         issues_raw = data.get("issues")
         issues = issues_raw if isinstance(issues_raw, str) and issues_raw.lower() not in ("null", "없음", "none", "") else None
         return final_name, issues
-    except Exception:
+    except Exception as e:
+        if is_rate_limit_error(e):
+            raise
         return optimized, None
+
+
+def openai_optimize_name(
+    original: str,
+    core_keywords: list[str],
+    aux_words: list[str],
+    api_key: str,
+    model: str = OPENAI_FALLBACK_MODEL,
+) -> str:
+    guide_name = build_guide_name(core_keywords, aux_words)
+    prompt = _build_optimize_prompt(original, core_keywords, aux_words, guide_name)
+    result = _openai_chat_completion(OPTIMIZE_SYSTEM, prompt, api_key, model=model)
+    return result.strip() or guide_name
+
+
+def openai_enforce_min_length(
+    name: str,
+    original: str,
+    top_keywords: list[str],
+    api_key: str,
+    model: str = OPENAI_FALLBACK_MODEL,
+) -> str:
+    if len(name) >= 25:
+        return name
+    prompt = _build_enforce_min_length_prompt(name, original, top_keywords)
+    result = clean_by_rules(_openai_chat_completion(OPTIMIZE_SYSTEM, prompt, api_key, model=model), original)
+    return result if len(result) >= 25 else name
+
+
+def openai_verify_name(
+    original: str,
+    optimized: str,
+    api_key: str,
+    allowed_keywords: list[str] | None = None,
+    model: str = OPENAI_FALLBACK_MODEL,
+) -> tuple[str, str | None]:
+    prompt = _build_verify_prompt(original, optimized, allowed_keywords)
+    raw = _openai_chat_completion(VERIFY_SYSTEM, prompt, api_key, model=model)
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        raw = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+    data = json.loads(raw)
+    final_name = data.get("final_name") or optimized
+    issues_raw = data.get("issues")
+    issues = issues_raw if isinstance(issues_raw, str) and issues_raw.lower() not in ("null", "없음", "none", "") else None
+    return final_name, issues
 
 
 # ── 소싱 에이전트 ───────────────────────────────────────────────────

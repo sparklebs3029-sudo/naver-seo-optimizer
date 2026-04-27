@@ -22,6 +22,8 @@ from naver_seo_agent import (
     build_word_pool, filter_to_pool,
     get_reverse_compounds,
     _gemini_call,
+    is_rate_limit_error,
+    openai_optimize_name, openai_verify_name, openai_enforce_min_length,
 )
 
 ATTRIBUTE_WORDS = [
@@ -122,6 +124,7 @@ class OrchestratorReport:
     passed_validation: bool                 # 최종 품질 검증 통과 여부
     validation_failures: list[str] = field(default_factory=list)  # 각 시도별 실패 이유
     errors: list[ErrorReport] = field(default_factory=list)       # 발생한 오류 목록
+    fallback_stages: list[str] = field(default_factory=list)      # OpenAI fallback 사용 단계
     warning: str | None = None              # max_retries 초과 경고 등
 
 
@@ -274,6 +277,7 @@ def run_with_orchestration(
     verify_model   = models['verify']
     naver_id       = api_keys['naver_id']
     naver_secret   = api_keys['naver_secret']
+    openai_key     = api_keys.get('openai_key', '')
 
     def _progress(attempt: int, stage: str, detail: str = "") -> None:
         if progress_callback:
@@ -281,6 +285,7 @@ def run_with_orchestration(
 
     all_validation_failures: list[str] = []
     all_errors: list[ErrorReport] = []
+    fallback_stages_used: list[str] = []
     original_clean = strip_product_code(original)
     top_keywords: list[str] = []  # _final_cleanup 호출 전 미정의 방지
     last_final_name = original_clean
@@ -334,15 +339,55 @@ def run_with_orchestration(
             # Stage 3: 최적화
             stage = "상품명 최적화"
             _progress(attempt, "3/4 상품명 최적화 중...", f"핵심키워드: {', '.join(core_keywords)}")
-            optimized = optimize_name(original_clean, core_keywords, aux_words, optimize_model)
+            try:
+                optimized = optimize_name(original_clean, core_keywords, aux_words, optimize_model)
+            except Exception as e:
+                if not (openai_key and is_rate_limit_error(e)):
+                    raise
+                optimized = openai_optimize_name(original_clean, core_keywords, aux_words, openai_key)
+                fallback_stages_used.append(stage)
+                all_errors.append(ErrorReport(
+                    stage=stage,
+                    error_type="API 한도 초과",
+                    message=str(e)[:200],
+                    action_taken="Gemini 429 감지 후 OpenAI fallback으로 상품명 최적화 계속 진행",
+                    resolved=True,
+                ))
             cleaned = clean_by_rules(optimized, original_clean, top_keywords)
 
             # Stage 4: 검수
             stage = "검수"
             _progress(attempt, "4/4 검수 중...")
-            final_name, issues = verify_name(original_clean, cleaned, verify_model, allowed_keywords=top_keywords)
+            try:
+                final_name, issues = verify_name(original_clean, cleaned, verify_model, allowed_keywords=top_keywords)
+            except Exception as e:
+                if not (openai_key and is_rate_limit_error(e)):
+                    raise
+                final_name, issues = openai_verify_name(original_clean, cleaned, openai_key, allowed_keywords=top_keywords)
+                fallback_stages_used.append(stage)
+                all_errors.append(ErrorReport(
+                    stage=stage,
+                    error_type="API 한도 초과",
+                    message=str(e)[:200],
+                    action_taken="Gemini 429 감지 후 OpenAI fallback으로 검수 계속 진행",
+                    resolved=True,
+                ))
             if len(final_name) < 25:
-                final_name = enforce_min_length(final_name, original_clean, top_keywords, optimize_model)
+                stage = "길이 보강"
+                try:
+                    final_name = enforce_min_length(final_name, original_clean, top_keywords, optimize_model)
+                except Exception as e:
+                    if not (openai_key and is_rate_limit_error(e)):
+                        raise
+                    final_name = openai_enforce_min_length(final_name, original_clean, top_keywords, openai_key)
+                    fallback_stages_used.append(stage)
+                    all_errors.append(ErrorReport(
+                        stage=stage,
+                        error_type="API 한도 초과",
+                        message=str(e)[:200],
+                        action_taken="Gemini 429 감지 후 OpenAI fallback으로 길이 보강 계속 진행",
+                        resolved=True,
+                    ))
 
             last_final_name = final_name
 
@@ -358,6 +403,7 @@ def run_with_orchestration(
                     passed_validation=True,
                     validation_failures=all_validation_failures,
                     errors=all_errors,
+                    fallback_stages=list(dict.fromkeys(fallback_stages_used)),
                 )
 
             # 실패: 피드백 생성 후 재시도
@@ -412,5 +458,6 @@ def run_with_orchestration(
         passed_validation=False,
         validation_failures=all_validation_failures,
         errors=all_errors,
+        fallback_stages=list(dict.fromkeys(fallback_stages_used)),
         warning=warning,
     )
