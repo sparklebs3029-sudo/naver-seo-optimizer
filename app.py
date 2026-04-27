@@ -544,6 +544,7 @@ if selected_tab == "optimizer":
                             )
                             state.all_reports.append(report)
                             _ws.cell(row=row_idx, column=_col_idx).value = final_name
+                            time.sleep(4)  # Gemini 무료 플랜 분당 15회 제한 대응 (4초 = 최대 15/분)
 
                             unresolved = [e for e in report.errors if not e.resolved]
                             if unresolved:
