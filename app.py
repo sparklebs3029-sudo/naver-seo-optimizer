@@ -639,7 +639,7 @@ if selected_tab == "sourcing":
                 client_secret     = naver_secret,
                 active_prohibited = active_prohibited,
                 extra_prohibited  = extra_prohibited,
-                top_n             = 5,
+                top_n             = 10,
             )
 
         if fetched:
