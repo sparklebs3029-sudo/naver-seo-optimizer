@@ -117,6 +117,9 @@ if not st.session_state.gemini_key:
 if "daily_file_count" not in st.session_state:
     st.session_state.daily_file_count = {}
 
+if "file_queue" not in st.session_state:
+    st.session_state.file_queue = []  # [{"name": str, "bytes": bytes}, ...]
+
 for _k, _v in [
     ("image_editor_saved_data", {}),
     ("image_editor_last_file_name", ""),
@@ -218,18 +221,22 @@ def _save_editor_image(prod_no: str, filename: str, data_url: str, saved_data: d
 # ── 배치 처리 상태 클래스 ──────────────────────────────────────────
 @dataclass
 class _BatchState:
-    running:    bool               = False
-    stopped:    bool               = False
-    done:       bool               = False
-    progress:   int                = 0
-    total:      int                = 0
-    log:        list               = field(default_factory=list)
-    status:     str                = ""
-    all_reports: list              = field(default_factory=list)
-    hard_errors: list              = field(default_factory=list)
-    result_buf: bytes | None       = None
-    out_name:   str                = ""
-    stop_event: threading.Event    = field(default_factory=threading.Event)
+    running:           bool               = False
+    stopped:           bool               = False
+    done:              bool               = False
+    progress:          int                = 0
+    total:             int                = 0
+    log:               list               = field(default_factory=list)
+    status:            str                = ""
+    all_reports:       list               = field(default_factory=list)
+    hard_errors:       list               = field(default_factory=list)
+    result_buf:        bytes | None       = None
+    out_name:          str                = ""
+    stop_event:        threading.Event    = field(default_factory=threading.Event)
+    total_files:       int                = 1
+    current_file_idx:  int                = 1
+    current_file_name: str                = ""
+    file_results:      list               = field(default_factory=list)
 
 
 if "batch" not in st.session_state:
@@ -375,28 +382,68 @@ if selected_tab == "optimizer":
 
     # ── 엑셀 파일 모드 ────────────────────────────────────────────────
     else:
-        uploaded_file = st.file_uploader(
-            "엑셀 파일 업로드 (.xlsx)",
-            type=["xlsx"],
-            help="1행: 헤더 / 상품명 열은 아래 드롭다운에서 선택합니다.",
-            key="optimizer_file",
-        )
+        fq    = st.session_state.file_queue
+        batch = st.session_state.batch
 
-        if uploaded_file:
-            raw_bytes = uploaded_file.read()
-            wb_preview = openpyxl.load_workbook(io.BytesIO(raw_bytes))
-            ws_preview = wb_preview.active
+        # ── 처리 중이 아닐 때만 업로드/대기열 UI 표시 ───────────────
+        if not batch.running and not ((batch.done or batch.stopped) and batch.file_results):
+            # ── 파일 업로드 + 대기열 추가 ────────────────────────────
+            uploaded_file = st.file_uploader(
+                "엑셀 파일 업로드 (.xlsx)",
+                type=["xlsx"],
+                help="파일을 드래그하거나 클릭해서 선택 → '대기열에 추가' 클릭. 여러 파일을 순서대로 추가할 수 있습니다.",
+                key="optimizer_file",
+            )
+
+            if uploaded_file:
+                already = any(item["name"] == uploaded_file.name for item in fq)
+                col_add, col_msg = st.columns([2, 3])
+                with col_add:
+                    add_btn = st.button("대기열에 추가", type="primary", use_container_width=True,
+                                        disabled=already)
+                with col_msg:
+                    if already:
+                        st.warning(f"이미 추가됨: {uploaded_file.name}")
+
+                if add_btn and not already:
+                    fq.append({"name": uploaded_file.name, "bytes": uploaded_file.read()})
+                    st.rerun()
+
+            # ── 대기열 표시 ──────────────────────────────────────────
+            if fq:
+                st.markdown(f"**대기열 ({len(fq)}개 파일)** — 순서대로 처리됩니다")
+                for idx, item in enumerate(fq):
+                    c_name, c_del = st.columns([5, 1])
+                    c_name.text(f"{idx + 1}. {item['name']}")
+                    if c_del.button("✕", key=f"del_q_{idx}", help="제거"):
+                        fq.pop(idx)
+                        st.rerun()
+
+                if st.button("대기열 전체 비우기", use_container_width=True):
+                    st.session_state.file_queue = []
+                    st.rerun()
+
+                st.divider()
+
+        if fq and not batch.running and not ((batch.done or batch.stopped) and batch.file_results):
+            # 열 선택은 대기열 첫 번째 파일 기준
+            first_bytes = fq[0]["bytes"]
+            wb_preview  = openpyxl.load_workbook(io.BytesIO(first_bytes))
+            ws_preview  = wb_preview.active
 
             col_options = []
             for col in range(1, ws_preview.max_column + 1):
-                col_letter  = get_column_letter(col)
-                header_val  = ws_preview.cell(row=1, column=col).value
-                label       = f"{col_letter}열 - {header_val}" if header_val else f"{col_letter}열"
+                col_letter = get_column_letter(col)
+                header_val = ws_preview.cell(row=1, column=col).value
+                label      = f"{col_letter}열 - {header_val}" if header_val else f"{col_letter}열"
                 col_options.append(label)
 
             default_idx      = min(7, len(col_options) - 1)
-            selected_label   = st.selectbox("상품명 열 선택", col_options, index=default_idx,
-                                            help="샵플링: H열 / 플레이오토: 해당 열 직접 선택")
+            selected_label   = st.selectbox(
+                "상품명 열 선택 (모든 파일에 적용)",
+                col_options, index=default_idx,
+                help="샵플링: H열 / 플레이오토: 해당 열 직접 선택"
+            )
             selected_col_idx = col_options.index(selected_label) + 1
 
             data_rows_preview = [
@@ -405,61 +452,85 @@ if selected_tab == "optimizer":
                 if ws_preview.cell(row=r, column=selected_col_idx).value
                 and str(ws_preview.cell(row=r, column=selected_col_idx).value).strip()
             ]
-            st.info(f"총 **{len(data_rows_preview)}개** 상품명 감지됨")
+            caption = f"첫 번째 파일 기준 **{len(data_rows_preview)}개** 상품명 감지됨"
+            if len(fq) > 1:
+                caption += f" (파일 {len(fq)}개 전체 처리)"
+            st.info(caption)
 
-            with st.expander("상품명 미리보기 (상위 5개)"):
+            with st.expander("상품명 미리보기 (첫 번째 파일, 상위 5개)"):
                 for _, name in data_rows_preview[:5]:
                     st.text(name)
 
-            batch = st.session_state.batch
+            all_raw_bytes = [item["bytes"] for item in fq]
 
-            # ── 시작 버튼 (처리 중이 아닐 때만 표시) ────────────────
-            if not batch.running:
-                start_btn = st.button("최적화 시작", type="primary",
-                                      disabled=not keys_ready, use_container_width=True)
-                if start_btn:
-                    genai.configure(api_key=gemini_key)
-                    models = {
-                        'keyword':  genai.GenerativeModel("gemini-2.0-flash", system_instruction=KEYWORD_SYSTEM,  generation_config=GEMINI_CONFIG),
-                        'classify': genai.GenerativeModel("gemini-2.0-flash", system_instruction=CLASSIFY_SYSTEM, generation_config=GEMINI_CONFIG),
-                        'optimize': genai.GenerativeModel("gemini-2.0-flash", system_instruction=OPTIMIZE_SYSTEM, generation_config=GEMINI_CONFIG),
-                        'verify':   genai.GenerativeModel("gemini-2.0-flash", system_instruction=VERIFY_SYSTEM,   generation_config=GEMINI_CONFIG),
-                    }
-                    api_keys = {'naver_id': naver_id, 'naver_secret': naver_secret}
+            # ── 시작 버튼 ────────────────────────────────────────────
+            start_btn = st.button("최적화 시작", type="primary",
+                                  disabled=not keys_ready, use_container_width=True)
+            if start_btn:
+                genai.configure(api_key=gemini_key)
+                models = {
+                    'keyword':  genai.GenerativeModel("gemini-2.0-flash", system_instruction=KEYWORD_SYSTEM,  generation_config=GEMINI_CONFIG),
+                    'classify': genai.GenerativeModel("gemini-2.0-flash", system_instruction=CLASSIFY_SYSTEM, generation_config=GEMINI_CONFIG),
+                    'optimize': genai.GenerativeModel("gemini-2.0-flash", system_instruction=OPTIMIZE_SYSTEM, generation_config=GEMINI_CONFIG),
+                    'verify':   genai.GenerativeModel("gemini-2.0-flash", system_instruction=VERIFY_SYSTEM,   generation_config=GEMINI_CONFIG),
+                }
+                api_keys = {'naver_id': naver_id, 'naver_secret': naver_secret}
 
-                    wb = openpyxl.load_workbook(io.BytesIO(raw_bytes))
-                    ws = wb.active
-                    data_rows = [
-                        (r, str(ws.cell(row=r, column=selected_col_idx).value).strip())
-                        for r in range(2, ws.max_row + 1)
-                        if ws.cell(row=r, column=selected_col_idx).value
-                        and str(ws.cell(row=r, column=selected_col_idx).value).strip()
-                    ]
+                # 파일명은 메인 스레드에서 미리 계산 (스레드에서 session_state 쓰기 금지)
+                now          = datetime.now()
+                datetime_str = now.strftime("%Y%m%d%H%M")
+                today_str    = now.strftime("%Y%m%d")
+                if today_str not in st.session_state.daily_file_count:
+                    st.session_state.daily_file_count = {today_str: 0}
 
-                    # 파일명은 메인 스레드에서 미리 계산 (스레드에서 session_state 쓰기 금지)
-                    now          = datetime.now()
-                    datetime_str = now.strftime("%Y%m%d%H%M")
-                    today_str    = now.strftime("%Y%m%d")
-                    if today_str not in st.session_state.daily_file_count:
-                        st.session_state.daily_file_count = {today_str: 0}
+                file_infos = []
+                out_names  = []
+                for item, raw in zip(fq, all_raw_bytes):
                     st.session_state.daily_file_count[today_str] += 1
                     n        = st.session_state.daily_file_count[today_str]
-                    stem     = os.path.splitext(uploaded_file.name)[0]
+                    stem     = os.path.splitext(item["name"])[0]
                     out_name = f"{stem}_최적화_{datetime_str}_{n}.xlsx"
+                    file_infos.append((raw, item["name"]))
+                    out_names.append(out_name)
 
-                    new_batch = _BatchState(total=len(data_rows), running=True, out_name=out_name)
-                    st.session_state.batch = new_batch
+                new_batch = _BatchState(
+                    running=True,
+                    total_files=len(file_infos),
+                    current_file_name=fq[0]["name"],
+                )
+                st.session_state.batch = new_batch
 
-                    def _run_batch(state: _BatchState, drows, _models, _api_keys, _wb, _ws, _col_idx):
+                def _run_batch(state: _BatchState, _file_infos, _models, _api_keys, _col_idx, _out_names):
+                    total_files = len(_file_infos)
+                    for file_idx, (raw_bytes, orig_name) in enumerate(_file_infos, 1):
+                        if state.stop_event.is_set():
+                            state.status  = f"중단됨 — 파일 {file_idx - 1}/{total_files} 완료"
+                            state.stopped = True
+                            break
+
+                        state.current_file_idx  = file_idx
+                        state.current_file_name = orig_name
+
+                        _wb = openpyxl.load_workbook(io.BytesIO(raw_bytes))
+                        _ws = _wb.active
+                        drows = [
+                            (r, str(_ws.cell(row=r, column=_col_idx).value).strip())
+                            for r in range(2, _ws.max_row + 1)
+                            if _ws.cell(row=r, column=_col_idx).value
+                            and str(_ws.cell(row=r, column=_col_idx).value).strip()
+                        ]
+                        state.total    = len(drows)
+                        state.progress = 0
+
                         for i, (row_idx, original) in enumerate(drows, 1):
                             if state.stop_event.is_set():
-                                state.status  = f"중단됨 — {i - 1}개 완료"
+                                state.status  = f"중단됨 — 파일 {file_idx}/{total_files}, 행 {i - 1}/{len(drows)} 완료"
                                 state.stopped = True
                                 break
 
-                            def _prog(attempt, stage, detail="", _i=i, _t=len(drows)):
+                            def _prog(attempt, stage, detail="", _i=i, _t=len(drows), _fi=file_idx, _ft=total_files):
                                 prefix = f"[시도{attempt}] " if attempt > 1 else ""
-                                state.status = f"[{_i}/{_t}] {prefix}{stage}" + (f" — {detail}" if detail else "")
+                                state.status = f"[파일 {_fi}/{_ft}] [{_i}/{_t}] {prefix}{stage}" + (f" — {detail}" if detail else "")
 
                             final_name, report = run_with_orchestration(
                                 original, _models, _api_keys,
@@ -471,7 +542,7 @@ if selected_tab == "optimizer":
 
                             unresolved = [e for e in report.errors if not e.resolved]
                             if unresolved:
-                                state.hard_errors.append({"행": row_idx, "원본": original, "보고서": report})
+                                state.hard_errors.append({"파일": orig_name, "행": row_idx, "원본": original, "보고서": report})
 
                             retry_note = f" (재시도 {report.attempts}회)" if report.attempts > 1 else ""
                             warn_note  = " ⚠️" if not report.passed_validation else ""
@@ -484,113 +555,117 @@ if selected_tab == "optimizer":
                                     last_err = report.errors[-1]
                                     fail_note = f"\n  오류 : [{last_err.stage}] {last_err.error_type} — {last_err.message[:80]}"
                             state.log.append(
-                                f"[{i}/{len(drows)}]{retry_note}{warn_note}\n"
+                                f"[파일{file_idx}/{total_files}][{i}/{len(drows)}]{retry_note}{warn_note}\n"
                                 f"  원본 : {original}\n"
                                 f"  최종 : {final_name}  ({len(final_name)}자)"
                                 f"{fail_note}"
                             )
                             state.progress = i
 
+                        # 파일 1개 완료 → 결과 저장
                         buf = io.BytesIO()
                         _wb.save(buf)
                         buf.seek(0)
-                        state.result_buf = buf.read()
-                        state.running    = False
-                        state.done       = True
+                        state.file_results.append({"name": _out_names[file_idx - 1], "buf": buf.read()})
 
-                    t = threading.Thread(
-                        target=_run_batch,
-                        args=(new_batch, data_rows, models, api_keys, wb, ws, selected_col_idx),
-                        daemon=True,
-                    )
-                    t.start()
-                    st.rerun()
+                        if state.stopped:
+                            break
 
-            # ── 처리 중 UI ────────────────────────────────────────────
-            if batch.running:
-                pct = batch.progress / batch.total if batch.total else 0
-                st.progress(pct, text=batch.status or "처리 준비 중...")
+                    if not state.stopped:
+                        state.done = True
+                    state.running = False
 
-                if st.button("⛔ 중단", type="secondary", use_container_width=True):
-                    batch.stop_event.set()
-
-                if batch.log:
-                    st.text_area("처리 로그", "\n\n".join(batch.log[-8:]),
-                                 height=300, label_visibility="collapsed")
-                time.sleep(1)
+                t = threading.Thread(
+                    target=_run_batch,
+                    args=(new_batch, file_infos, models, api_keys, selected_col_idx, out_names),
+                    daemon=True,
+                )
+                t.start()
                 st.rerun()
 
-            # ── 완료 / 중단 후 결과 표시 ─────────────────────────────
-            if (batch.done or batch.stopped) and batch.result_buf:
-                all_reports  = batch.all_reports
-                hard_errors  = batch.hard_errors
-                success_count = sum(1 for r in all_reports if not [e for e in r.errors if not e.resolved])
-                retry_count   = sum(1 for r in all_reports if r.attempts > 1)
+        # ── 처리 중 UI ────────────────────────────────────────────
+        if batch.running:
+            if batch.total_files > 1:
+                file_pct = (batch.current_file_idx - 1) / batch.total_files
+                st.progress(file_pct, text=f"파일 {batch.current_file_idx}/{batch.total_files}: {batch.current_file_name}")
+            row_pct = batch.progress / batch.total if batch.total else 0
+            st.progress(row_pct, text=batch.status or "처리 준비 중...")
 
-                if batch.stopped:
-                    st.warning(batch.status)
-                else:
-                    st.success(
-                        f"처리 완료: {success_count}개 성공 / {len(hard_errors)}개 오류"
-                        + (f" / {retry_count}개 재시도 발생" if retry_count else "")
-                    )
+            if st.button("⛔ 중단", type="secondary", use_container_width=True):
+                batch.stop_event.set()
 
-                st.divider()
+            if batch.log:
+                st.text_area("처리 로그", "\n\n".join(batch.log[-8:]),
+                             height=300, label_visibility="collapsed")
+            time.sleep(1)
+            st.rerun()
+
+        # ── 완료 / 중단 후 결과 표시 ─────────────────────────────
+        if (batch.done or batch.stopped) and batch.file_results:
+            all_reports   = batch.all_reports
+            hard_errors   = batch.hard_errors
+            success_count = sum(1 for r in all_reports if not [e for e in r.errors if not e.resolved])
+            retry_count   = sum(1 for r in all_reports if r.attempts > 1)
+            total_items   = len(all_reports)
+
+            if batch.stopped:
+                st.warning(batch.status)
+            else:
+                files_done = len(batch.file_results)
+                st.success(
+                    f"처리 완료: 파일 {files_done}개 / 상품명 {success_count}개 성공 / {len(hard_errors)}개 오류"
+                    + (f" / {retry_count}개 재시도 발생" if retry_count else "")
+                )
+
+            st.divider()
+            for fr in batch.file_results:
                 st.download_button(
-                    "결과 엑셀 다운로드", data=batch.result_buf, file_name=batch.out_name,
+                    f"다운로드: {fr['name']}", data=fr["buf"],
+                    file_name=fr["name"],
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     type="primary", use_container_width=True,
                 )
 
-                if st.button("새 파일 처리", use_container_width=True):
-                    st.session_state.batch = _BatchState()
-                    st.rerun()
+            if st.button("새 파일 처리", use_container_width=True):
+                st.session_state.batch      = _BatchState()
+                st.session_state.file_queue = []
+                st.rerun()
 
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric("전체",   batch.progress)
-                c2.metric("성공",   success_count)
-                c3.metric("오류",   len(hard_errors))
-                c4.metric("재시도", retry_count)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("전체",   total_items)
+            c2.metric("성공",   success_count)
+            c3.metric("오류",   len(hard_errors))
+            c4.metric("재시도", retry_count)
 
-                if hard_errors:
-                    st.subheader("오류 목록")
-                    for item in hard_errors:
-                        report = item["보고서"]
-                        with st.expander(f"🔴 행 {item['행']} | {item['원본'][:50]}"):
-                            for err in report.errors:
-                                icon = "🟠" if err.resolved else "🔴"
-                                st.markdown(
-                                    f"{icon} **[{err.stage}]** {err.error_type}  \n"
-                                    f"조치: {err.action_taken}  \n"
-                                    f"메시지: `{err.message[:120]}`"
-                                )
-                            if report.warning:
-                                st.warning(report.warning)
-
-                retried = [r for r in all_reports if r.attempts > 1 and r.passed_validation]
-                if retried:
-                    with st.expander(f"🟠 재시도 후 성공 {len(retried)}건"):
-                        for r in retried:
+            if hard_errors:
+                st.subheader("오류 목록")
+                for item in hard_errors:
+                    report   = item["보고서"]
+                    file_tag = f" [{item['파일']}]" if item.get("파일") else ""
+                    with st.expander(f"🔴 행 {item['행']}{file_tag} | {item['원본'][:50]}"):
+                        for err in report.errors:
+                            icon = "🟠" if err.resolved else "🔴"
                             st.markdown(
-                                f"- **{r.original[:45]}** → `{r.final_name[:45]}`  "
-                                f"({r.attempts}회 시도)"
+                                f"{icon} **[{err.stage}]** {err.error_type}  \n"
+                                f"조치: {err.action_taken}  \n"
+                                f"메시지: `{err.message[:120]}`"
                             )
-                            if r.validation_failures:
-                                st.caption("실패 이유: " + " / ".join(r.validation_failures[:2]))
+                        if report.warning:
+                            st.warning(report.warning)
 
-                if not hard_errors and retry_count == 0 and batch.done:
-                    st.success("특이 사항 없음. 모든 상품명이 정상 최적화되었습니다.")
+            retried = [r for r in all_reports if r.attempts > 1 and r.passed_validation]
+            if retried:
+                with st.expander(f"🟠 재시도 후 성공 {len(retried)}건"):
+                    for r in retried:
+                        st.markdown(
+                            f"- **{r.original[:45]}** → `{r.final_name[:45]}`  "
+                            f"({r.attempts}회 시도)"
+                        )
+                        if r.validation_failures:
+                            st.caption("실패 이유: " + " / ".join(r.validation_failures[:2]))
 
-        else:
-            st.markdown("---")
-            st.markdown(
-                "**사용 방법**\n"
-                "1. 왼쪽 사이드바에 API 키 입력 후 저장\n"
-                "2. 엑셀 파일 업로드\n"
-                "3. 상품명 열 선택 (샵플링: H열 기본)\n"
-                "4. **최적화 시작** 클릭\n"
-                "5. 완료 후 결과 파일 다운로드"
-            )
+            if not hard_errors and retry_count == 0 and batch.done:
+                st.success("특이 사항 없음. 모든 상품명이 정상 최적화되었습니다.")
 
 
 # ════════════════════════════════════════════════════════════════════
