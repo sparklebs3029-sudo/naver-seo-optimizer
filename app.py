@@ -39,26 +39,21 @@ st.set_page_config(
     layout="wide",
 )
 
-st.title("셀러부스트")
-st.caption(f"네이버 SEO 상품명 최적화 + 트렌드 상품 소싱  |  {APP_VERSION}")
 st.markdown(
-    """
+    f"""
     <style>
-    .block-container {
+    .block-container {{
         max-width: 96rem;
         padding-top: 1.2rem;
         padding-left: 2rem;
         padding-right: 2rem;
-    }
-    h1 {
-        overflow: visible !important;
-        line-height: 1.3 !important;
-        padding: 0.1em 0 !important;
-    }
-    iframe[title="image_editor.image_editor"] {
+    }}
+    iframe[title="image_editor.image_editor"] {{
         width: 100% !important;
-    }
+    }}
     </style>
+    <h1 style="font-size:2.5rem; line-height:1.5; padding:0.15em 0; margin-bottom:0;">셀러부스트</h1>
+    <p style="color:#888; font-size:0.875rem; margin-top:0.25rem; margin-bottom:1rem;">네이버 SEO 상품명 최적화 + 트렌드 상품 소싱&nbsp;&nbsp;|&nbsp;&nbsp;{APP_VERSION}</p>
     """,
     unsafe_allow_html=True,
 )
