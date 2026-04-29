@@ -50,6 +50,11 @@ st.markdown(
         padding-left: 2rem;
         padding-right: 2rem;
     }
+    h1 {
+        overflow: visible !important;
+        line-height: 1.3 !important;
+        padding: 0.1em 0 !important;
+    }
     iframe[title="image_editor.image_editor"] {
         width: 100% !important;
     }
