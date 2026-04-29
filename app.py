@@ -119,6 +119,16 @@ if not st.session_state.gemini_key:
         except Exception:
             pass
 
+# Secrets에 OPENAI_API_KEY가 없을 때 쿠키에서 보완
+if not st.session_state.openai_key:
+    try:
+        _all = _cm.get_all() or {}
+        _oa  = _all.get("sb_openai", "") or ""
+        if _oa:
+            st.session_state.openai_key = _oa
+    except Exception:
+        pass
+
 if "daily_file_count" not in st.session_state:
     st.session_state.daily_file_count = {}
 
