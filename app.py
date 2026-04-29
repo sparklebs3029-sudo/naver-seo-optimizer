@@ -44,7 +44,7 @@ st.markdown(
     <style>
     .block-container {{
         max-width: 96rem;
-        padding-top: 1.2rem;
+        padding-top: 5rem;
         padding-left: 2rem;
         padding-right: 2rem;
     }}
@@ -847,11 +847,11 @@ if selected_tab == "image_editor":
     st.markdown(
         """
         <style>
-        h1, div[data-testid="stCaptionContainer"] {
+        div[data-testid="stCaptionContainer"] {
             display: none !important;
         }
         .block-container {
-            padding-top: 0.6rem !important;
+            padding-top: 1rem !important;
         }
         div[role="radiogroup"] {
             margin-top: 0 !important;
